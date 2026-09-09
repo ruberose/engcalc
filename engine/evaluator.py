@@ -23,9 +23,13 @@ from sympy.parsing.sympy_parser import (
 from engine.functions import CONSTANTS, FUNCTIONS
 from engine.parser import parse_input
 from engine.scope import Scope
+from engine.unit_manager import Quantity, attach_units, make_quantity, simplify
 
 # ^ 는 거듭제곱으로, ==(그리고 =)는 Eq()로 해석하도록 SymPy 기본 파서 규칙을 확장한다.
 _TRANSFORMATIONS = standard_transformations + (convert_xor, convert_equals_signs)
+
+# "200 kN" 처럼 단위가 붙은 리터럴은 attach_units()가 미리 이 이름의 호출로 바꿔둔다.
+_UNIT_LOCALS = {"__quantity__": make_quantity}
 
 
 @dataclass
@@ -66,8 +70,9 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
         return EvalResult(variable_name=parsed.variable_name)
 
     try:
-        local_dict = {**FUNCTIONS, **CONSTANTS, **scope.as_dict()}
-        raw_result = parse_expr(parsed.expression_text, local_dict=local_dict, transformations=_TRANSFORMATIONS)
+        expression_text = attach_units(parsed.expression_text)
+        local_dict = {**FUNCTIONS, **CONSTANTS, **_UNIT_LOCALS, **scope.as_dict()}
+        raw_result = parse_expr(expression_text, local_dict=local_dict, transformations=_TRANSFORMATIONS)
     except Exception as exc:  # noqa: BLE001 - 사용자 입력 파싱 경계이므로 의도적으로 광범위하게 잡음
         return EvalResult(variable_name=parsed.variable_name, error=f"수식 오류: {exc}")
 
@@ -91,12 +96,15 @@ def _finalize(raw_result: Any) -> Any:
     파싱 직후 결과를 최종 표시값으로 정리한다.
 
     - 이미 파이썬 bool/sympy Boolean(비교 연산 결과)이면 bool로 통일.
+    - 단위가 붙은 값(Pint Quantity)이면 보기 좋은 단위로 정리한다(예: kN/mm^2 -> MPa).
     - 그 외 숫자식이면 evalf()로 수치화 (변수가 남아 있으면 심볼릭 상태 그대로 반환됨).
     """
     if isinstance(raw_result, bool):
         return raw_result
     if isinstance(raw_result, sympy.logic.boolalg.BooleanAtom):
         return bool(raw_result)
+    if isinstance(raw_result, Quantity):
+        return simplify(raw_result)
     if hasattr(raw_result, "evalf"):
         return raw_result.evalf()
     return raw_result

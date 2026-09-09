@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from blocks.base_block import BaseBlock
 from engine.evaluator import EvalResult, evaluate
 from engine.scope import Scope
+from engine.unit_manager import Quantity
 from rendering.math_renderer import render_to_pixmap
 
 # --- 서식 상수 ---
@@ -312,6 +313,18 @@ def _format_value(value) -> str:
     """계산 결과를 사람이 읽기 좋은 문자열로 바꾼다."""
     if isinstance(value, bool):
         return "True" if value else "False"
+    if isinstance(value, Quantity):
+        # 단위가 붙은 값은 float()으로 바로 못 바꾼다(Pint가 일부러 막아둠 —
+        # "몇 mm인지" 같은 단위 없는 숫자로의 변환은 의미가 불분명하기 때문).
+        # magnitude(숫자)와 units(단위)를 따로 포맷해서 합친다.
+        magnitude_text = _format_number(value.magnitude)
+        unit_text = f"{value.units:~P}"
+        return f"{magnitude_text} {unit_text}".strip()
+    return _format_number(value)
+
+
+def _format_number(value) -> str:
+    """단위 없는 순수 숫자를 사람이 읽기 좋은 문자열로 바꾼다."""
     try:
         as_float = float(value)
     except (TypeError, ValueError):

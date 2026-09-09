@@ -29,3 +29,24 @@ def test_korean_variable_name():
     result = parse_input("sigma_허용 = 24")
     assert result.variable_name == "sigma_허용"
     assert result.expression_text == "24"
+
+
+def test_trailing_equals_is_stripped():
+    """계산기 습관대로 끝에 '='만 붙인 경우("32mm + 42mm =") 그 '='는 무시해야 한다."""
+    result = parse_input("32mm + 42mm =")
+    assert result.variable_name is None
+    assert result.expression_text == "32mm + 42mm"
+
+
+def test_trailing_equals_after_assignment():
+    """대입문 뒤에 붙은 trailing '='도 마찬가지로 무시해야 한다."""
+    result = parse_input("a = 100 =")
+    assert result.variable_name == "a"
+    assert result.expression_text == "100"
+
+
+def test_trailing_equals_does_not_break_comparison_operators():
+    """>=, <=, == 처럼 '='로 끝나는 진짜 비교 연산자는 건드리면 안 된다."""
+    for text in ["a >=", "a <=", "a =="]:
+        result = parse_input(text)
+        assert result.expression_text == text, f"{text!r} 이 잘못 잘렸음: {result.expression_text!r}"

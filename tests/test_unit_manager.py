@@ -30,6 +30,17 @@ def test_attach_units_ignores_non_unit_words():
     assert attach_units("2 * 3") == "2 * 3"
 
 
+def test_attach_units_without_space():
+    """숫자와 단위 사이에 공백이 없어도(예: "32mm") 인식되어야 한다."""
+    result = attach_units("32mm + 42mm")
+    assert result == "__quantity__(32, 'mm') + __quantity__(42, 'mm')"
+
+
+def test_attach_units_does_not_break_scientific_notation():
+    """공백 없는 단위를 허용해도 "1e5" 같은 과학적 표기법은 건드리면 안 된다."""
+    assert attach_units("a = 1e5") == "a = 1e5"
+
+
 def test_korean_ton_convention():
     """한국 구조설계 관례대로 'ton'은 미터톤(1000kg)이어야 한다 (Pint 기본값인 미국 톤 아님)."""
     q = make_quantity(1, "ton")

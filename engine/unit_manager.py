@@ -45,10 +45,13 @@ def is_valid_unit(unit_text: str) -> bool:
         return False
 
 
-# 숫자 뒤에 공백을 두고 오는 "단위처럼 생긴" 토큰을 찾는다.
-# 예: "200 kN", "24 MPa", "5 kg/m^3" (공백 없는 복합단위는 통째로 한 토큰)
+# 숫자 뒤에 (공백이 있든 없든) 오는 "단위처럼 생긴" 토큰을 찾는다.
+# 예: "200 kN", "32mm"(공백 없이 붙여 써도 인식), "5 kg/m^3"
 # 앞쪽 lookbehind는 "sigma1 200mm"처럼 다른 식별자 중간의 숫자를 잘못 잡지 않기 위함.
-_UNIT_SUFFIX_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)[ \t]+([A-Za-z][A-Za-z0-9_*/^]*)")
+# 뒤에 오는 토큰이 진짜 단위인지는 is_valid_unit()으로 한 번 더 검증하므로,
+# 공백을 선택적으로(0개 이상) 허용해도 "1e5"(과학적 표기) 같은 숫자는
+# 후보 단위 "e5"가 실제 단위가 아니라서 안전하게 원래 형태로 남는다.
+_UNIT_SUFFIX_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])(\d+(?:\.\d+)?)[ \t]*([A-Za-z][A-Za-z0-9_*/^]*)")
 
 
 def attach_units(text: str) -> str:

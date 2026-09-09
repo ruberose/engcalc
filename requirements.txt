@@ -1,0 +1,5 @@
+PySide6>=6.6
+sympy>=1.12
+pint>=0.23
+reportlab>=4.0
+matplotlib>=3.8

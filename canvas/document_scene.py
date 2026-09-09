@@ -27,7 +27,8 @@ class DocumentScene(QGraphicsScene):
     사용 예:
         scene = DocumentScene()
         view = DocumentView(scene)
-        # 캔버스 빈 곳을 더블클릭하면 그 자리에 텍스트 블록이 생긴다
+        # 캔버스 빈 곳을 더블클릭하면 그 자리에 수식 블록이 생긴다
+        # (Ctrl+더블클릭이면 텍스트 블록)
     """
 
     def __init__(self) -> None:
@@ -42,7 +43,8 @@ class DocumentScene(QGraphicsScene):
         """
         빈 캔버스를 더블클릭하면 블록을 만든다.
 
-        Ctrl을 누른 채 더블클릭하면 수식 블록을, 그냥 더블클릭하면 텍스트 블록을 만든다.
+        이 프로그램의 핵심 기능은 계산이므로, 그냥 더블클릭하면 수식 블록을 만든다.
+        Ctrl을 누른 채 더블클릭하면 텍스트 블록(제목/설명용)을 만든다.
         (블록 종류를 고르는 툴바는 Phase 7에서 추가될 예정 — 그 전까지의 임시 단축키.)
 
         Note:
@@ -56,9 +58,9 @@ class DocumentScene(QGraphicsScene):
             return
 
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self._create_math_block(event.scenePos())
-        else:
             self._create_text_block(event.scenePos())
+        else:
+            self._create_math_block(event.scenePos())
         event.accept()
 
     def _create_text_block(self, scene_pos: QPointF) -> TextBlock:

@@ -35,7 +35,9 @@ class MainWindow(QMainWindow):
 
         self._create_menu_bar()
         self._create_canvas()
-        self.statusBar().showMessage("준비됨 — 캔버스를 더블클릭해 텍스트 블록을 추가하세요")
+        self.statusBar().showMessage(
+            "준비됨 — 더블클릭: 수식 블록 추가 / Ctrl+더블클릭: 텍스트 블록 추가"
+        )
 
     def _create_menu_bar(self) -> None:
         """

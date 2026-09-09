@@ -2,13 +2,16 @@
 문서 캔버스를 화면에 보여주는 뷰 — QGraphicsView 서브클래스.
 
 마우스 휠 확대/축소, Space+드래그로 캔버스 스크롤(패닝), Delete 키로
-선택된 블록 삭제 기능을 담당한다. "그리기" 자체는 DocumentScene의 몫이고,
-이 클래스는 사용자 입력(휠, 키보드)을 어떻게 캔버스 조작으로 바꿀지만 다룬다.
+선택된 블록 삭제, 이미지 파일 드래그앤드롭 삽입을 담당한다. "그리기" 자체는
+DocumentScene의 몫이고, 이 클래스는 사용자 입력을 어떻게 캔버스 조작으로
+바꿀지만 다룬다.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeyEvent, QPainter, QWheelEvent
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QKeyEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+
+from blocks.image_block import SUPPORTED_EXTENSIONS
 
 # --- 확대/축소 배율 ---
 ZOOM_IN_FACTOR = 1.15
@@ -36,6 +39,55 @@ class DocumentView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._current_scale: float = 1.0
+
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        """탐색기에서 지원하는 이미지 파일을 끌고 오면 받아들일 준비를 한다."""
+        if self._has_supported_image_url(event):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:  # noqa: N802
+        """드래그 중에도 계속 받아들일 수 있음을 알려준다 (Qt 드래그앤드롭 규약)."""
+        if self._has_supported_image_url(event):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        """놓인 위치에 이미지 블록을 만든다."""
+        scene = self.scene()
+        if scene is None or not hasattr(scene, "create_image_block_from_file"):
+            super().dropEvent(event)
+            return
+
+        image_paths = [
+            url.toLocalFile()
+            for url in event.mimeData().urls()
+            if url.isLocalFile() and url.toLocalFile().lower().endswith(SUPPORTED_EXTENSIONS)
+        ]
+        if not image_paths:
+            super().dropEvent(event)
+            return
+
+        scene_pos = self.mapToScene(event.position().toPoint())
+        for offset, path in enumerate(image_paths):
+            # 여러 파일을 한 번에 드롭하면 겹치지 않도록 조금씩 오른쪽 아래로 어긋나게 놓는다.
+            pos = scene_pos + type(scene_pos)(offset * 20, offset * 20)
+            scene.create_image_block_from_file(pos, path)
+
+        event.acceptProposedAction()
+
+    def _has_supported_image_url(self, event) -> bool:
+        """드래그 중인 항목에 지원 형식의 로컬 이미지 파일이 하나라도 있는지 확인한다."""
+        if not event.mimeData().hasUrls():
+            return False
+        return any(
+            url.isLocalFile() and url.toLocalFile().lower().endswith(SUPPORTED_EXTENSIONS)
+            for url in event.mimeData().urls()
+        )
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         """마우스 휠로 커서 위치를 중심으로 확대/축소한다."""

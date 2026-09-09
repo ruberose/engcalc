@@ -10,6 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QPainter, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
+from blocks.image_block import ImageBlock, load_pixmap_from_file
 from blocks.math_block import MathBlock
 from blocks.text_block import TextBlock
 from canvas.grid import draw_grid
@@ -75,6 +76,24 @@ class DocumentScene(QGraphicsScene):
         block = MathBlock(position=(scene_pos.x(), scene_pos.y()))
         self.addItem(block)
         block.start_editing()
+        return block
+
+    def create_image_block_from_file(self, scene_pos: QPointF, file_path: str) -> ImageBlock | None:
+        """
+        이미지 파일을 읽어 주어진 씬 좌표에 ImageBlock을 만들어 추가한다.
+
+        메뉴("파일 > 이미지 삽입")와 드래그앤드롭(DocumentView) 양쪽에서 공용으로 쓴다.
+
+        Returns:
+            성공하면 만들어진 ImageBlock, 파일을 읽을 수 없으면 None
+            (예: 손상된 파일, 지원하지 않는 형식) — 이 경우 블록을 만들지 않는다.
+        """
+        pixmap = load_pixmap_from_file(file_path)
+        if pixmap.isNull():
+            return None
+
+        block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap)
+        self.addItem(block)
         return block
 
     def recalculate_all(self) -> None:

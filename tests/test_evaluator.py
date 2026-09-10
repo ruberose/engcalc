@@ -63,3 +63,47 @@ def test_empty_expression_has_no_error():
     result = evaluate("", scope)
     assert not result.is_error
     assert result.value is None
+
+
+def test_division_by_zero_is_an_error_not_silent_infinity():
+    """
+    '1/0'은 SymPy에서 예외 없이 zoo(복소무한대)를 돌려주는데, 이걸 '정상 결과'
+    처럼 scope에 남겨두면 분모가 실수로 0이 된 경우를 사용자가 못 알아채고
+    잘못된 계산이 뒤로 계속 퍼질 수 있다. 공학 계산 도구이므로 반드시 에러여야 한다.
+    """
+    scope = Scope()
+    result = evaluate("a = 1/0", scope)
+    assert result.is_error
+    assert not scope.has("a"), "0으로 나눈 결과가 그대로 scope에 등록되면 안 됨"
+
+
+def test_zero_divided_by_zero_is_an_error():
+    """'0/0'(SymPy에서 nan)도 마찬가지로 에러 처리되어야 한다."""
+    scope = Scope()
+    result = evaluate("0/0", scope)
+    assert result.is_error
+
+
+def test_division_by_zero_does_not_propagate_through_scope():
+    """0으로 나눈 값이 scope에 안 남으므로, 그걸 참조하는 다음 블록은 '정의되지 않은 변수' 에러가 나야 한다."""
+    scope = Scope()
+    evaluate("a = 1/0", scope)
+    result = evaluate("b = a + 5", scope)
+    assert result.is_error
+
+
+def test_division_by_zero_with_units_is_an_error():
+    """단위가 붙은 값을 0으로 나눠도(Quantity로 감싸진 zoo) 에러여야 한다."""
+    scope = Scope()
+    evaluate("F = 200 kN", scope)
+    result = evaluate("a = F / 0", scope)
+    assert result.is_error
+
+
+def test_normal_division_with_units_still_works():
+    """0으로 나누기 방지 로직을 추가해도, 정상적인 단위 나눗셈은 그대로 동작해야 한다."""
+    scope = Scope()
+    evaluate("F = 200 kN", scope)
+    result = evaluate("a = F / 4", scope)
+    assert not result.is_error
+    assert abs(result.value.to("kN").magnitude - 50.0) < 1e-9

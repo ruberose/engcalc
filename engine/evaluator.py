@@ -31,6 +31,12 @@ _TRANSFORMATIONS = standard_transformations + (convert_xor, convert_equals_signs
 # "200 kN" 처럼 단위가 붙은 리터럴은 attach_units()가 미리 이 이름의 호출로 바꿔둔다.
 _UNIT_LOCALS = {"__quantity__": make_quantity}
 
+# "1/0" 같은 계산은 SymPy에서 예외가 나지 않고 조용히 zoo(복소무한대)/nan/oo를
+# 돌려준다. 공학 계산 도구에서 이런 값이 에러 표시 없이 "정상 결과"처럼 남아
+# 이후 계산에 계속 퍼지면 위험하므로(예: 분모가 어쩌다 0이 된 실수), 명시적으로
+# 에러 취급한다.
+_INVALID_NUMERIC_VALUES = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
+
 
 @dataclass
 class EvalResult:
@@ -85,6 +91,9 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
         names = ", ".join(sorted(str(sym) for sym in value.free_symbols))
         return EvalResult(variable_name=parsed.variable_name, error=f"정의되지 않은 변수: {names}")
 
+    if _is_invalid_numeric_result(value):
+        return EvalResult(variable_name=parsed.variable_name, error="계산 오류: 0으로 나누거나 정의되지 않은 값입니다 (무한대/nan)")
+
     if parsed.variable_name is not None:
         scope.set(parsed.variable_name, value)
 
@@ -104,7 +113,18 @@ def _finalize(raw_result: Any) -> Any:
     if isinstance(raw_result, sympy.logic.boolalg.BooleanAtom):
         return bool(raw_result)
     if isinstance(raw_result, Quantity):
+        if _is_invalid_numeric_result(raw_result.magnitude):
+            # magnitude가 zoo/nan이면 simplify()의 to_compact()가 "정의되지 않은
+            # 동작" 경고를 내며 이상하게 굴 수 있으니, 정리하지 말고 그대로 반환한다
+            # — evaluate()가 곧바로 이 값을 보고 에러로 처리한다.
+            return raw_result
         return simplify(raw_result)
     if hasattr(raw_result, "evalf"):
         return raw_result.evalf()
     return raw_result
+
+
+def _is_invalid_numeric_result(value: Any) -> bool:
+    """0으로 나누기 등으로 zoo/nan/oo가 나왔는지 확인한다 (Quantity로 감싸져 있어도 확인)."""
+    candidate = value.magnitude if isinstance(value, Quantity) else value
+    return isinstance(candidate, sympy.Basic) and candidate in _INVALID_NUMERIC_VALUES

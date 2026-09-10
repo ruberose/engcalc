@@ -107,6 +107,32 @@ class _InlineTextEditor(QGraphicsTextItem):
         super().keyPressEvent(event)
 
 
+class _UnitEditor(QGraphicsTextItem):
+    """
+    결과의 표시 단위만 편집하는 작은 인라인 에디터.
+
+    Ctrl+더블클릭으로 들어가며, 전체 수식이 아니라 단위 문자열 하나만
+    입력받는다는 점만 빼면 _InlineTextEditor와 동일한 패턴이다.
+    """
+
+    def __init__(self, parent_block: "MathBlock") -> None:
+        super().__init__(parent_block)
+        self._parent_block = parent_block
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        """편집창 밖을 클릭하면 편집을 마무리한다."""
+        super().focusOutEvent(event)
+        self._parent_block.finish_unit_editing()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        """Enter로도 편집을 끝낼 수 있게 한다."""
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._parent_block.finish_unit_editing()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class MathBlock(BaseBlock):
     """
     수식 블록.
@@ -118,6 +144,7 @@ class MathBlock(BaseBlock):
         # -> "F = 200 kN" 처럼 입력 자체가 이미 값이면 한 줄로만 표시됨
         # -> "A + B" 처럼 결과가 따로 필요하면 "A + B = 15 m" 한 줄로 합쳐서 표시
         # -> 선택 후 우측 손잡이로 폭을 좁히면 입력/결과 두 줄로 접힘(PPT 글상자처럼)
+        # -> Ctrl+더블클릭하면 단위만 바로 바꿀 수 있음(예: "m" -> "mm", 값도 자동 환산)
     """
 
     BLOCK_TYPE = "math"
@@ -145,6 +172,7 @@ class MathBlock(BaseBlock):
         self._resize_start_width = 0.0
 
         self._editor: _InlineTextEditor | None = None
+        self._unit_editor: _UnitEditor | None = None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
 
@@ -266,6 +294,8 @@ class MathBlock(BaseBlock):
         if self._editor is not None:
             width = self._manual_width if self._manual_width is not None else 220.0
             return QRectF(0, 0, max(width, 100.0), 24)
+        if self._unit_editor is not None:
+            return QRectF(0, 0, 100.0, 24)
 
         metrics = QFontMetrics(self._plain_font())
 
@@ -293,7 +323,7 @@ class MathBlock(BaseBlock):
         option: QStyleOptionGraphicsItem,
         widget: QWidget | None = None,
     ) -> None:
-        if self._editor is not None:
+        if self._editor is not None or self._unit_editor is not None:
             return
 
         metrics = QFontMetrics(self._plain_font())
@@ -433,11 +463,20 @@ class MathBlock(BaseBlock):
     # --- 편집 모드 ---
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
-        """더블클릭하면 편집 모드로 들어간다 (손잡이를 더블클릭한 경우는 무시)."""
+        """
+        더블클릭하면 편집 모드로 들어간다.
+
+        Ctrl을 누른 채 더블클릭하면 전체 수식이 아니라 결과의 "표시 단위"만
+        고칠 수 있다 (예: "m" -> "mm"이라고 치면 값도 자동으로 환산되어 보임).
+        손잡이를 (Ctrl 여부와 무관하게) 더블클릭한 경우는 무시한다.
+        """
         if self._handle_rect().contains(event.pos()):
             event.accept()
             return
-        self.start_editing()
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.start_unit_editing()
+        else:
+            self.start_editing()
         event.accept()
 
     def start_editing(self) -> None:
@@ -482,6 +521,69 @@ class MathBlock(BaseBlock):
         scene = self.scene()
         if scene is not None and hasattr(scene, "recalculate_all"):
             scene.recalculate_all()
+
+    # --- 단위만 편집하는 모드 (Ctrl+더블클릭) ---
+
+    def _has_convertible_result(self) -> bool:
+        """지금 결과가 단위 있는 값(Quantity)이라 단위를 바꿔볼 수 있는 상태인지."""
+        return self._result is not None and not self._result.is_error and isinstance(self._result.value, Quantity)
+
+    def _current_unit_text(self) -> str:
+        """지금 화면에 표시 중인 단위 문자열 (표시 단위를 따로 지정했으면 그걸, 아니면 자동 정리된 단위)."""
+        if self._preferred_unit:
+            return self._preferred_unit
+        if self._has_convertible_result():
+            return f"{self._result.value.units:~P}"
+        return ""
+
+    def start_unit_editing(self) -> None:
+        """
+        단위만 편집하는 인라인 에디터를 띄운다.
+
+        Note:
+            결과가 단위 있는 값(Quantity)일 때만 의미가 있다 — 에러 상태이거나
+            단위 없는 순수 숫자·불리언 결과면 바꿀 단위 자체가 없으므로 무시한다.
+        """
+        if self._editor is not None or self._unit_editor is not None:
+            return
+        if not self._has_convertible_result():
+            return
+
+        self.prepareGeometryChange()
+        self._unit_editor = _UnitEditor(self)
+        self._unit_editor.setFont(self._plain_font())
+        self._unit_editor.setDefaultTextColor(Qt.GlobalColor.black)
+        self._unit_editor.setPlainText(self._current_unit_text())
+        self._unit_editor.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+        self._unit_editor.setPos(0, 0)
+
+        self._unit_editor.setFocus(Qt.FocusReason.MouseFocusReason)
+        cursor = self._unit_editor.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        self._unit_editor.setTextCursor(cursor)
+
+    def finish_unit_editing(self) -> None:
+        """
+        입력한 단위를 표시 단위로 확정한다.
+
+        Note:
+            set_preferred_unit()이 이미 "호환 안 되거나 알 수 없는 단위면 조용히
+            무시하고 원래 값을 보여준다"를 처리하므로, 여기서는 값을 그대로
+            넘기기만 하면 된다 — 재계산이 아니라 표시 방식만 바뀌는 것이므로
+            scene.recalculate_all()을 부를 필요는 없다.
+        """
+        if self._unit_editor is None:
+            return
+
+        new_unit = self._unit_editor.toPlainText()
+
+        editor = self._unit_editor
+        self._unit_editor = None
+        editor.setParentItem(None)
+        if editor.scene() is not None:
+            editor.scene().removeItem(editor)
+
+        self.set_preferred_unit(new_unit)
 
     # --- 직렬화 ---
 

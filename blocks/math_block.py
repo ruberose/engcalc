@@ -4,6 +4,11 @@
 구조:
     [입력 영역]  -> engine.evaluator.evaluate()  -> [결과 표시 영역]
 
+기본적으로는 "입력 = 결과"를 파워포인트 글상자처럼 한 줄에 표시한다. 블록을
+선택한 뒤 우측 가장자리 손잡이를 드래그해서 폭을 좁히면, 그 폭에 다 안 들어갈
+때만 입력 줄과 "= 결과" 줄로 나뉜다(줄바꿈). 폭을 직접 지정한 적이 없으면
+항상 내용에 맞춰 한 줄로 넓어진다.
+
 평소에는 입력/결과를 rendering/math_renderer.py로 미리 렌더링해둔 이미지를
 그대로 그리다가(paint), 더블클릭하면 TextBlock과 같은 방식으로 인라인
 QGraphicsTextItem을 띄워 원문을 편집시킨다.
@@ -16,7 +21,7 @@ QGraphicsTextItem을 띄워 원문을 편집시킨다.
 import re
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsSceneMouseEvent,
@@ -44,6 +49,10 @@ TEXT_COLOR = QColor(0, 0, 0)
 ERROR_COLOR = QColor(190, 30, 30)
 PLACEHOLDER_COLOR = QColor(160, 160, 160)
 
+#: 우측 폭 조절 손잡이 크기(px)와, 블록이 아무리 좁아져도 유지할 최소 폭.
+_HANDLE_SIZE = 10.0
+_MIN_WIDTH = 80.0
+
 
 def _strip_spaces(text: str) -> str:
     """공백을 전부 지운다 ("5M"과 "5 M"을 같은 것으로 비교하기 위한 용도)."""
@@ -65,6 +74,16 @@ def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap |
     if pixmap.isNull():
         return None, text
     return pixmap, None
+
+
+def _line_size(metrics: QFontMetrics, pixmap: QPixmap | None, fallback: str | None) -> tuple[float, float]:
+    """(pixmap, 대체 텍스트) 한 줄이 차지할 (너비, 높이). 둘 다 없으면 (0, 0)."""
+    if pixmap is not None:
+        return float(pixmap.width()), float(pixmap.height())
+    if fallback is not None:
+        rect = metrics.boundingRect(fallback)
+        return float(rect.width()), float(rect.height())
+    return 0.0, 0.0
 
 
 class _InlineTextEditor(QGraphicsTextItem):
@@ -96,7 +115,9 @@ class MathBlock(BaseBlock):
         block = MathBlock(position=(100, 200))
         block.set_input_text("F = 200 kN")
         block.evaluate(scope)
-        # -> 결과 영역에 값이 표시되고, 대입문이면 scope에 등록됨
+        # -> "F = 200 kN" 처럼 입력 자체가 이미 값이면 한 줄로만 표시됨
+        # -> "A + B" 처럼 결과가 따로 필요하면 "A + B = 15 m" 한 줄로 합쳐서 표시
+        # -> 선택 후 우측 손잡이로 폭을 좁히면 입력/결과 두 줄로 접힘(PPT 글상자처럼)
     """
 
     BLOCK_TYPE = "math"
@@ -107,12 +128,21 @@ class MathBlock(BaseBlock):
         self._input_text: str = ""
         self._result: EvalResult | None = None
         self._preferred_unit: str | None = None  # 속성 패널에서 지정한 결과 표시 단위
+        self._manual_width: float | None = None  # 손잡이로 직접 지정한 폭. None이면 자동(항상 한 줄)
 
         # 각 줄은 (렌더링된 pixmap) 또는 (일반 텍스트로 그릴 문자열) 중 하나만 채워진다.
         self._input_pixmap: QPixmap | None = None
         self._input_fallback: str | None = None
         self._result_pixmap: QPixmap | None = None
         self._result_fallback: str | None = None
+        # "입력 = 결과"를 한 줄로 합친 버전 (폭이 충분할 때 이걸 그린다).
+        self._combined_pixmap: QPixmap | None = None
+        self._combined_fallback: str | None = None
+        self._one_line_mode: bool = True
+
+        self._resizing = False
+        self._resize_start_mouse = None
+        self._resize_start_width = 0.0
 
         self._editor: _InlineTextEditor | None = None
 
@@ -126,10 +156,7 @@ class MathBlock(BaseBlock):
 
         Note:
             계산기 습관대로 끝에 붙인 "="(예: "A + B =")는 여기서 미리 지운다.
-            engine.evaluator도 계산할 때 그 "="를 무시하긴 하지만, 화면에 보여줄
-            self._input_text 자체에서 안 지우면 "A + B ="라는 입력 줄 끝의 "="와
-            그 아래 "= 10m" 결과 줄의 "="가 나란히 보여서 등호가 두 번 있는
-            것처럼 보였다(버그체크 중 발견).
+            (자세한 이유는 engine.parser.strip_trailing_calculator_equals 참고.)
 
             여기서는 텍스트만 바꿀 뿐 재계산은 하지 않는다. 재계산은 이 블록만이
             아니라 전체 문서 순서에 영향을 주므로, DocumentScene.recalculate_all()이
@@ -137,8 +164,7 @@ class MathBlock(BaseBlock):
         """
         self._input_text = strip_trailing_calculator_equals(text)
         self._input_pixmap, self._input_fallback = _render_line(self._input_text)
-        self.prepareGeometryChange()
-        self.update()
+        self._recompute_layout()
 
     def input_text(self) -> str:
         """현재 입력된 수식 원문을 반환한다."""
@@ -161,11 +187,27 @@ class MathBlock(BaseBlock):
             건드리지 않으므로, 이 블록을 참조하는 다른 블록의 계산에는 영향이 없다.
         """
         self._preferred_unit = unit_text.strip() or None
-        self._refresh_result_display()
+        self._recompute_layout()
 
     def preferred_unit(self) -> str:
         """현재 지정된 표시 단위. 지정 안 했으면 빈 문자열."""
         return self._preferred_unit or ""
+
+    def set_manual_width(self, width: float | None) -> None:
+        """
+        폭을 직접 지정한다 (우측 손잡이 드래그로 호출됨).
+
+        Args:
+            width: 새 폭(px). None이면 "자동 크기"로 되돌아가 항상 한 줄로 넓어진다.
+        """
+        self.prepareGeometryChange()
+        self._manual_width = max(_MIN_WIDTH, width) if width is not None else None
+        self._one_line_mode = self._fits_in_one_line()
+        self.update()
+
+    def manual_width(self) -> float | None:
+        """손잡이로 지정한 폭. 자동 크기 상태면 None."""
+        return self._manual_width
 
     def evaluate(self, scope: Scope) -> None:
         """
@@ -177,39 +219,72 @@ class MathBlock(BaseBlock):
                    같은 재계산 루프의 다음 블록들이 이어서 참조할 수 있다.
         """
         self._result = evaluate(self._input_text, scope)
-        self._refresh_result_display()
+        self._recompute_layout()
 
-    def _refresh_result_display(self) -> None:
-        """_result를 기준으로 결과 줄 이미지를 다시 만든다 (재계산은 하지 않음)."""
+    def _recompute_layout(self) -> None:
+        """
+        입력/결과/표시단위 중 하나라도 바뀔 때마다 호출한다.
+
+        결과 줄(분리 버전)과 "입력 = 결과"(한 줄로 합친 버전) 이미지를 다시 만들고,
+        지금 폭(자동 또는 손잡이로 지정한 값)에 맞춰 한 줄/두 줄 중 무엇을
+        보여줄지 정한다.
+        """
         if self._result is None or self._result.is_error:
             self._result_pixmap, self._result_fallback = None, None
         else:
             line = self._result_line_text()
             self._result_pixmap, self._result_fallback = _render_line(line) if line else (None, None)
 
+        combined = self._combined_line_text()
+        self._combined_pixmap, self._combined_fallback = _render_line(combined) if combined else (None, None)
+
         self.prepareGeometryChange()
+        self._one_line_mode = self._fits_in_one_line()
         self.update()
+
+    def _combined_line_text(self) -> str | None:
+        """"입력 = 결과"를 한 줄로 합친 문자열. 따로 합칠 결과가 없으면 입력 그대로."""
+        if not self._input_text.strip():
+            return None
+        result_part = self._result_line_text()
+        if result_part is None:
+            return self._input_text
+        return f"{self._input_text} {result_part}"
+
+    def _fits_in_one_line(self) -> bool:
+        """지금 폭에 "입력 = 결과"가 한 줄로 들어가는지 확인한다."""
+        if self._manual_width is None:
+            return True  # 손잡이로 줄인 적 없으면 항상 내용에 맞춰 한 줄로 넓어진다.
+        metrics = QFontMetrics(self._plain_font())
+        natural_width, _ = _line_size(metrics, self._combined_pixmap, self._combined_fallback)
+        available = self._manual_width - TEXT_PADDING * 2 - _HANDLE_SIZE
+        return natural_width <= available
 
     # --- QGraphicsItem 필수 구현 ---
 
     def boundingRect(self) -> QRectF:  # noqa: N802
         if self._editor is not None:
-            return QRectF(0, 0, 220, 24)
+            width = self._manual_width if self._manual_width is not None else 220.0
+            return QRectF(0, 0, max(width, 100.0), 24)
 
         metrics = QFontMetrics(self._plain_font())
-        width, height = self._top_line_size(metrics)
 
-        bottom_pixmap, bottom_text = self._bottom_line()
-        if bottom_pixmap is not None:
-            width = max(width, bottom_pixmap.width())
-            height += LINE_SPACING + bottom_pixmap.height()
-        elif bottom_text is not None:
-            rect = metrics.boundingRect(bottom_text)
-            width = max(width, rect.width())
-            height += LINE_SPACING + rect.height()
+        if not self._input_text.strip():
+            content_w, content_h = _line_size(metrics, None, PLACEHOLDER_TEXT)  # 안내 문구는 항상 한 줄
+        elif self._one_line_mode:
+            content_w, content_h = _line_size(metrics, self._combined_pixmap, self._combined_fallback)
+        else:
+            top_w, top_h = _line_size(metrics, self._input_pixmap, self._input_fallback)
+            bottom_pixmap, bottom_text = self._bottom_line()
+            bottom_w, bottom_h = _line_size(metrics, bottom_pixmap, bottom_text)
+            content_w = max(top_w, bottom_w)
+            content_h = top_h + (LINE_SPACING + bottom_h if bottom_h > 0 else 0.0)
 
-        width = max(width + TEXT_PADDING * 2, 80)
-        height = max(height + TEXT_PADDING * 2, 28)
+        width = self._manual_width if self._manual_width is not None else content_w + TEXT_PADDING * 2
+        height = content_h + TEXT_PADDING * 2
+
+        width = max(width, 80.0)
+        height = max(height, 28.0)
         return QRectF(0, 0, width, height)
 
     def paint(
@@ -222,49 +297,65 @@ class MathBlock(BaseBlock):
             return
 
         metrics = QFontMetrics(self._plain_font())
-        y = TEXT_PADDING
+        y = float(TEXT_PADDING)
 
-        # --- 입력 줄 ---
-        if self._input_pixmap is not None:
-            painter.drawPixmap(TEXT_PADDING, y, self._input_pixmap)
-            y += self._input_pixmap.height() + LINE_SPACING
-        elif self._input_fallback is not None:
-            y += self._draw_plain_line(painter, metrics, y, self._input_fallback, TEXT_COLOR)
+        if not self._input_text.strip():
+            self._draw_plain_line(painter, metrics, y, PLACEHOLDER_TEXT, PLACEHOLDER_COLOR)
+        elif self._one_line_mode:
+            self._draw_one_line(painter, y)
         else:
-            y += self._draw_plain_line(painter, metrics, y, PLACEHOLDER_TEXT, PLACEHOLDER_COLOR)
+            y += self._draw_input_line(painter, metrics, y)
+            self._draw_bottom_line(painter, metrics, y)
 
-        # --- 결과/에러 줄 ---
+        if self.isSelected():
+            rect = self.boundingRect()
+            pen = QPen(QColor(0, 0, 0))
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect)
+
+            painter.setPen(QPen(QColor(0, 0, 0)))
+            painter.setBrush(QColor(255, 255, 255))
+            painter.drawRect(self._handle_rect())
+
+    def _draw_one_line(self, painter: QPainter, y: float) -> None:
+        """"입력 = 결과"를 한 줄로 그린다."""
+        if self._combined_pixmap is not None:
+            painter.drawPixmap(TEXT_PADDING, int(y), self._combined_pixmap)
+        elif self._combined_fallback is not None:
+            metrics = QFontMetrics(self._plain_font())
+            self._draw_plain_line(painter, metrics, y, self._combined_fallback, TEXT_COLOR)
+
+    def _draw_input_line(self, painter: QPainter, metrics: QFontMetrics, y: float) -> float:
+        """(두 줄 모드) 입력 줄을 그리고, 다음 줄이 시작할 y 증가분을 돌려준다."""
+        if self._input_pixmap is not None:
+            painter.drawPixmap(TEXT_PADDING, int(y), self._input_pixmap)
+            return self._input_pixmap.height() + LINE_SPACING
+        if self._input_fallback is not None:
+            return self._draw_plain_line(painter, metrics, y, self._input_fallback, TEXT_COLOR)
+        return 0.0
+
+    def _draw_bottom_line(self, painter: QPainter, metrics: QFontMetrics, y: float) -> None:
+        """(두 줄 모드) 결과/에러 줄을 그린다."""
         if self._result_pixmap is not None:
-            painter.drawPixmap(TEXT_PADDING, y, self._result_pixmap)
+            painter.drawPixmap(TEXT_PADDING, int(y), self._result_pixmap)
         elif self._result_fallback is not None:
             self._draw_plain_line(painter, metrics, y, self._result_fallback, TEXT_COLOR)
         elif self._result is not None and self._result.is_error:
             self._draw_plain_line(painter, metrics, y, self._result.error, ERROR_COLOR)
 
-        if self.isSelected():
-            pen = painter.pen()
-            pen.setColor(QColor(0, 0, 0))
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.drawRect(self.boundingRect())
-
-    def _draw_plain_line(self, painter: QPainter, metrics: QFontMetrics, y: int, text: str, color: QColor) -> int:
+    def _draw_plain_line(
+        self, painter: QPainter, metrics: QFontMetrics, y: float, text: str, color: QColor
+    ) -> float:
         """일반 폰트(한글 지원)로 한 줄을 그리고, 다음 줄이 시작할 y 오프셋 증가분을 돌려준다."""
         painter.setFont(self._plain_font())
         painter.setPen(color)
-        painter.drawText(TEXT_PADDING, y + metrics.ascent(), text)
+        painter.drawText(TEXT_PADDING, int(y) + metrics.ascent(), text)
         return metrics.height() + LINE_SPACING
 
-    def _top_line_size(self, metrics: QFontMetrics) -> tuple[int, int]:
-        """입력 줄(또는 안내 문구)이 차지할 (너비, 높이)."""
-        if self._input_pixmap is not None:
-            return self._input_pixmap.width(), self._input_pixmap.height()
-        text = self._input_fallback if self._input_fallback is not None else PLACEHOLDER_TEXT
-        rect = metrics.boundingRect(text)
-        return rect.width(), rect.height()
-
     def _bottom_line(self) -> tuple[QPixmap | None, str | None]:
-        """결과/에러 줄로 그릴 (pixmap, 텍스트) — 보여줄 게 없으면 (None, None)."""
+        """(두 줄 모드) 결과/에러 줄로 그릴 (pixmap, 텍스트) — 보여줄 게 없으면 (None, None)."""
         if self._result_pixmap is not None:
             return self._result_pixmap, None
         if self._result_fallback is not None:
@@ -272,6 +363,11 @@ class MathBlock(BaseBlock):
         if self._result is not None and self._result.is_error:
             return None, self._result.error
         return None, None
+
+    def _handle_rect(self) -> QRectF:
+        """우측 가장자리 폭 조절 손잡이 (이 블록의 로컬 좌표계 기준)."""
+        rect = self.boundingRect()
+        return QRectF(rect.width() - _HANDLE_SIZE, rect.height() / 2 - _HANDLE_SIZE / 2, _HANDLE_SIZE, _HANDLE_SIZE)
 
     def _plain_font(self) -> QFont:
         """시스템 기본 UI 폰트 — 한글도 깨지지 않고 표시된다."""
@@ -300,10 +396,47 @@ class MathBlock(BaseBlock):
             return None
         return f"= {formatted}"
 
+    # --- 폭 조절 (드래그) ---
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        """
+        선택된 상태에서 우측 손잡이를 누르면 폭 조절 모드로 들어간다.
+
+        Note:
+            손잡이가 아닌 곳을 누르면 그냥 super()에 맡긴다 — BaseBlock이 설정한
+            ItemIsMovable 플래그 덕분에 Qt가 알아서 드래그 이동을 처리해준다.
+        """
+        if self.isSelected() and self._handle_rect().contains(event.pos()):
+            self._resizing = True
+            self._resize_start_mouse = event.scenePos()
+            self._resize_start_width = self.boundingRect().width()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if self._resizing and self._resize_start_mouse is not None:
+            delta_x = event.scenePos().x() - self._resize_start_mouse.x()
+            self.set_manual_width(self._resize_start_width + delta_x)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if self._resizing:
+            self._resizing = False
+            self._resize_start_mouse = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     # --- 편집 모드 ---
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
-        """더블클릭하면 편집 모드로 들어간다."""
+        """더블클릭하면 편집 모드로 들어간다 (손잡이를 더블클릭한 경우는 무시)."""
+        if self._handle_rect().contains(event.pos()):
+            event.accept()
+            return
         self.start_editing()
         event.accept()
 
@@ -353,16 +486,19 @@ class MathBlock(BaseBlock):
     # --- 직렬화 ---
 
     def serialize(self) -> dict:
-        """공통 필드(BaseBlock) + 수식 원문 + 표시 단위를 함께 담는다."""
+        """공통 필드(BaseBlock) + 수식 원문 + 표시 단위 + (지정했다면) 폭을 담는다."""
         data = super().serialize()
         data["expression"] = self._input_text
         data["display_unit"] = self._preferred_unit or ""
+        if self._manual_width is not None:
+            data["width"] = self._manual_width
         return data
 
     def deserialize(self, data: dict) -> None:
-        """저장된 dict로부터 위치 + 수식 원문 + 표시 단위를 복원한다 (계산은 별도 recalculate_all()이 담당)."""
+        """저장된 dict로부터 위치 + 수식 원문 + 표시 단위 + 폭을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
         super().deserialize(data)
         self._preferred_unit = data.get("display_unit") or None
+        self._manual_width = data.get("width")
         self.set_input_text(data.get("expression", ""))
 
 

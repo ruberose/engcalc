@@ -165,6 +165,15 @@ class PropertyPanel(QWidget):
             return
         self._block.setPos(self._x_spin.value(), self._y_spin.value())
 
+        # 블록은 화면 위→아래 순서로 계산되므로(계획서 5.1), 여기서 위치를 바꿔
+        # 순서가 뒤집히면 재계산해야 한다. 마우스로 드래그할 때는 BaseBlock이
+        # 드래그가 "끝날 때" 한 번만 재계산하지만(blocks/base_block.py), 이 스핀박스는
+        # 마우스 이벤트를 거치지 않고 setPos()를 직접 호출하므로 그 경로를 안 탄다
+        # — 그래서 여기서 직접 요청해야 한다(버그체크 중 발견).
+        scene = self._block.scene()
+        if scene is not None and hasattr(scene, "recalculate_all"):
+            scene.recalculate_all()
+
     def _on_size_changed(self, _value: float) -> None:
         if self._updating or not isinstance(self._block, ImageBlock):
             return

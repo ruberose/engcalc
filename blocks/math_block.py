@@ -13,6 +13,8 @@ QGraphicsTextItem을 띄워 원문을 편집시킨다.
 경우 일반 텍스트로 대신 그려서, 한글 변수명도 깨지지 않고 보이게 한다.
 """
 
+import re
+
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -40,6 +42,11 @@ PLACEHOLDER_TEXT = "수식을 입력하세요"
 TEXT_COLOR = QColor(0, 0, 0)
 ERROR_COLOR = QColor(190, 30, 30)
 PLACEHOLDER_COLOR = QColor(160, 160, 160)
+
+
+def _strip_spaces(text: str) -> str:
+    """공백을 전부 지운다 ("5M"과 "5 M"을 같은 것으로 비교하기 위한 용도)."""
+    return re.sub(r"\s+", "", text)
 
 
 def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap | None, str | None]:
@@ -278,8 +285,12 @@ class MathBlock(BaseBlock):
                 pass  # 호환되지 않거나 알 수 없는 단위면 조용히 무시하고 원래 값을 보여준다
 
         formatted = format_value(value)
-        if self._input_text.strip().endswith(formatted):
-            return None  # "a = 100" 처럼 입력 자체가 이미 값이면 중복 표시하지 않는다
+        if _strip_spaces(self._input_text).endswith(_strip_spaces(formatted)):
+            # "a = 100" 처럼 입력 자체가 이미 값이면 중복 표시하지 않는다.
+            # 공백은 무시하고 비교한다 — format_value()는 숫자와 단위 사이에 항상
+            # 공백을 넣어 "5 M"로 만드는데, 사용자가 "5M"처럼 붙여 쓰면 문자열이
+            # 정확히 일치하지 않아서 중복 표시가 새는 버그가 있었다.
+            return None
         return f"= {formatted}"
 
     # --- 편집 모드 ---

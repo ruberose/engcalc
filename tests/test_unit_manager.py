@@ -41,6 +41,25 @@ def test_attach_units_does_not_break_scientific_notation():
     assert attach_units("a = 1e5") == "a = 1e5"
 
 
+def test_attach_units_does_not_swallow_arithmetic_after_compact_unit():
+    """
+    "2m*3*4kN"에서 "m" 뒤의 "*3*4kN"을 통째로(잘못된) 복합단위로 삼키면 안 된다.
+
+    버그체크 중 발견: 예전 정규식은 "*"/"/" 뒤에 숫자가 와도 계속 단위 후보에
+    포함시켰다. "m*3*4kN" 전체가 유효한 단위 문자열이 아니라서 is_valid_unit()이
+    거부했고, 그러면 "m" 하나도 단위로 인식 안 된 채 원문 그대로 남아
+    "2m"(공백도 연산자도 없는 숫자+글자)이 SymPy 파싱 단계에서 문법 오류가 났다.
+    """
+    result = attach_units("2m*3*4kN")
+    assert result == "__quantity__(2, 'm')*3*__quantity__(4, 'kN')"
+
+
+def test_attach_units_still_recognizes_compact_unit_written_together():
+    """"*"/"/" 뒤가 진짜 단위 글자로 이어지는 경우(복합단위)는 여전히 통째로 인식해야 한다."""
+    assert attach_units("5 kg/m^3") == "__quantity__(5, 'kg/m^3')"
+    assert attach_units("1 kN*m") == "__quantity__(1, 'kN*m')"
+
+
 def test_korean_ton_convention():
     """한국 구조설계 관례대로 'ton'은 미터톤(1000kg)이어야 한다 (Pint 기본값인 미국 톤 아님)."""
     q = make_quantity(1, "ton")

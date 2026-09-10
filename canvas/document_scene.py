@@ -148,16 +148,20 @@ class DocumentScene(QGraphicsScene):
 
         Note:
             기존에 캔버스에 있던 블록은 모두 지운다("새로 만들기"/"파일 열기" 공용).
-            알 수 없는 "type"(예: 이후 버전에서 추가된 블록을 예전 버전이 여는 경우)은
-            조용히 건너뛴다 — 앱을 죽이는 대신 나머지 블록만이라도 복원하기 위함.
+            알 수 없는 "type"(예: 이후 버전에서 추가된 블록을 예전 버전이 여는 경우)이나
+            필수 필드가 빠진 손상된 블록은 조용히 건너뛴다 — 블록 하나가 깨졌다고
+            문서 전체를 못 열게 되는 것보다, 나머지 블록만이라도 복원하는 게 낫다.
         """
         self.clear()
         for block_data in blocks:
             block_class = _BLOCK_CLASSES.get(block_data.get("type"))
             if block_class is None:
                 continue
-            block = block_class(block_id=block_data.get("id"))
-            block.deserialize(block_data)
+            try:
+                block = block_class(block_id=block_data.get("id"))
+                block.deserialize(block_data)
+            except (KeyError, ValueError, TypeError):
+                continue  # position 등 필수 필드 누락/형식 오류 - 이 블록만 건너뜀
             self.addItem(block)
         self.recalculate_all()
 

@@ -87,6 +87,22 @@ def test_load_blocks_list_skips_unknown_block_type():
     assert len(scene.items()) == 1
 
 
+def test_load_blocks_list_skips_block_missing_required_field():
+    """
+    필수 필드(position 등)가 빠진 손상된 블록은 건너뛰고, 나머지 정상 블록은
+    그대로 복원되어야 한다 — 버그체크 중 발견: 예전에는 KeyError로 문서 전체
+    불러오기가 죽었다.
+    """
+    scene = DocumentScene()
+    blocks_data = [
+        {"type": "math", "id": "blk_1", "expression": "a = 100"},  # position 없음 - 손상됨
+        {"type": "text", "id": "blk_2", "position": [0.0, 0.0], "content": "정상", "style": {"font_size": 14, "bold": False}},
+    ]
+    scene.load_blocks_list(blocks_data)  # 예외 없이 끝나야 함
+    assert len(scene.items()) == 1
+    assert scene.items()[0]._text == "정상"
+
+
 def test_math_block_preferred_display_unit_round_trips():
     """속성 패널에서 지정한 표시 단위(display_unit)도 저장/복원되어야 한다 (Phase 7)."""
     scene = DocumentScene()

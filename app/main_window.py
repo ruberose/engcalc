@@ -243,7 +243,16 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "파일 열기 실패", f"파일을 열 수 없습니다:\n{file_path}\n\n{exc}")
             return
 
-        self._scene.load_blocks_list(data.get("blocks", []))
+        try:
+            self._scene.load_blocks_list(data.get("blocks", []))
+        except (AttributeError, TypeError) as exc:
+            # DocumentScene.load_blocks_list()가 블록 하나하나의 손상은 이미 알아서
+            # 건너뛰지만(KeyError/ValueError/TypeError), "blocks"가 아예 리스트가
+            # 아니라거나 하는 파일 구조 자체의 문제는 여기서 한 번 더 막는다 —
+            # 어떤 경우에도 손상된 파일 하나 때문에 앱이 죽으면 안 된다(코드 규칙 4.4).
+            QMessageBox.critical(self, "파일 열기 실패", f"파일 형식이 올바르지 않습니다:\n{file_path}\n\n{exc}")
+            return
+
         metadata = data.get("metadata", {})
         self._created_at = metadata.get("created", datetime.now().isoformat())
         self._current_file_path = file_path

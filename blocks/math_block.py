@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import pint
+
 from blocks.base_block import BaseBlock
 from engine.evaluator import EvalResult, evaluate
 from engine.scope import Scope
@@ -96,6 +98,7 @@ class MathBlock(BaseBlock):
 
         self._input_text: str = ""
         self._result: EvalResult | None = None
+        self._preferred_unit: str | None = None  # 속성 패널에서 지정한 결과 표시 단위
 
         # 각 줄은 (렌더링된 pixmap) 또는 (일반 텍스트로 그릴 문자열) 중 하나만 채워진다.
         self._input_pixmap: QPixmap | None = None
@@ -127,6 +130,29 @@ class MathBlock(BaseBlock):
         """현재 입력된 수식 원문을 반환한다."""
         return self._input_text
 
+    def result(self) -> EvalResult | None:
+        """가장 최근 계산 결과를 반환한다 (아직 계산 전이면 None)."""
+        return self._result
+
+    def set_preferred_unit(self, unit_text: str) -> None:
+        """
+        결과를 표시할 때 쓸 단위를 지정한다 (속성 패널의 "표시 단위" 입력용).
+
+        Args:
+            unit_text: "kPa" 같은 단위 문자열. 빈 문자열이면 자동으로 정리된
+                       단위(engine.unit_manager.simplify 결과)를 그대로 쓴다.
+
+        Note:
+            표시 방식만 바꿀 뿐 재계산은 하지 않는다 — scope에 저장된 실제 값은
+            건드리지 않으므로, 이 블록을 참조하는 다른 블록의 계산에는 영향이 없다.
+        """
+        self._preferred_unit = unit_text.strip() or None
+        self._refresh_result_display()
+
+    def preferred_unit(self) -> str:
+        """현재 지정된 표시 단위. 지정 안 했으면 빈 문자열."""
+        return self._preferred_unit or ""
+
     def evaluate(self, scope: Scope) -> None:
         """
         engine.evaluator.evaluate()로 이 블록의 수식을 계산하고 결과 표시를 갱신한다.
@@ -137,8 +163,11 @@ class MathBlock(BaseBlock):
                    같은 재계산 루프의 다음 블록들이 이어서 참조할 수 있다.
         """
         self._result = evaluate(self._input_text, scope)
+        self._refresh_result_display()
 
-        if self._result.is_error:
+    def _refresh_result_display(self) -> None:
+        """_result를 기준으로 결과 줄 이미지를 다시 만든다 (재계산은 하지 않음)."""
+        if self._result is None or self._result.is_error:
             self._result_pixmap, self._result_fallback = None, None
         else:
             line = self._result_line_text()
@@ -240,7 +269,15 @@ class MathBlock(BaseBlock):
         """결과 줄에 표시할 문자열. 보여줄 게 없으면 None."""
         if self._result is None or self._result.value is None:
             return None
-        formatted = _format_value(self._result.value)
+
+        value = self._result.value
+        if self._preferred_unit and isinstance(value, Quantity):
+            try:
+                value = value.to(self._preferred_unit)
+            except (pint.errors.DimensionalityError, pint.errors.UndefinedUnitError):
+                pass  # 호환되지 않거나 알 수 없는 단위면 조용히 무시하고 원래 값을 보여준다
+
+        formatted = format_value(value)
         if self._input_text.strip().endswith(formatted):
             return None  # "a = 100" 처럼 입력 자체가 이미 값이면 중복 표시하지 않는다
         return f"= {formatted}"
@@ -298,18 +335,20 @@ class MathBlock(BaseBlock):
     # --- 직렬화 ---
 
     def serialize(self) -> dict:
-        """공통 필드(BaseBlock) + 수식 원문을 함께 담는다."""
+        """공통 필드(BaseBlock) + 수식 원문 + 표시 단위를 함께 담는다."""
         data = super().serialize()
         data["expression"] = self._input_text
+        data["display_unit"] = self._preferred_unit or ""
         return data
 
     def deserialize(self, data: dict) -> None:
-        """저장된 dict로부터 위치 + 수식 원문을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
+        """저장된 dict로부터 위치 + 수식 원문 + 표시 단위를 복원한다 (계산은 별도 recalculate_all()이 담당)."""
         super().deserialize(data)
+        self._preferred_unit = data.get("display_unit") or None
         self.set_input_text(data.get("expression", ""))
 
 
-def _format_value(value) -> str:
+def format_value(value) -> str:
     """계산 결과를 사람이 읽기 좋은 문자열로 바꾼다."""
     if isinstance(value, bool):
         return "True" if value else "False"

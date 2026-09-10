@@ -92,6 +92,18 @@ class TextBlock(BaseBlock):
         self.prepareGeometryChange()
         self.update()
 
+    def text(self) -> str:
+        """현재 텍스트 내용을 반환한다."""
+        return self._text
+
+    def is_bold(self) -> bool:
+        """굵게 표시 중인지 반환한다 (속성 패널이 체크박스 초기값으로 사용)."""
+        return self._bold
+
+    def font_size(self) -> int:
+        """현재 글자 크기(pt)를 반환한다."""
+        return self._font_size
+
     def _font(self) -> QFont:
         """현재 서식(굵기/크기)이 반영된 QFont를 만든다."""
         font = QFont()

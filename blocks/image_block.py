@@ -100,6 +100,24 @@ class ImageBlock(BaseBlock):
         self._resize_start_mouse = None
         self._resize_start_size = (0.0, 0.0)
 
+    def set_size(self, width: float, height: float) -> None:
+        """
+        블록 크기를 지정한다.
+
+        Note:
+            우측 하단 손잡이 드래그(mouseMoveEvent)와 속성 패널 입력, 두 경로 모두
+            결국 이 메서드가 하는 것과 같은 일(폭/높이 갱신 + 다시 그리기)을 하므로,
+            속성 패널은 이 공개 메서드를 통해서만 크기를 바꾼다.
+        """
+        self.prepareGeometryChange()
+        self._width = max(_MIN_SIZE, width)
+        self._height = max(_MIN_SIZE, height)
+        self.update()
+
+    def caption(self) -> str:
+        """이미지 캡션을 반환한다."""
+        return self._caption
+
     # --- QGraphicsItem 필수 구현 ---
 
     def boundingRect(self) -> QRectF:  # noqa: N802
@@ -157,10 +175,7 @@ class ImageBlock(BaseBlock):
         if self._resizing and self._resize_start_mouse is not None:
             delta = event.scenePos() - self._resize_start_mouse
             start_w, start_h = self._resize_start_size
-            self.prepareGeometryChange()
-            self._width = max(_MIN_SIZE, start_w + delta.x())
-            self._height = max(_MIN_SIZE, start_h + delta.y())
-            self.update()
+            self.set_size(start_w + delta.x(), start_h + delta.y())
             event.accept()
             return
         super().mouseMoveEvent(event)

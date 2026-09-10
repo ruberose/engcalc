@@ -12,16 +12,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QKeySequence
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QMessageBox
+from PySide6.QtWidgets import QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox
 
 from app.settings import add_recent_file, get_recent_files
+from blocks.base_block import BaseBlock
 from blocks.image_block import SUPPORTED_EXTENSIONS
+from blocks.math_block import MathBlock
 from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
 from file_io.pdf_exporter import export_to_pdf
+from ui.property_panel import PropertyPanel
+from ui.variable_inspector import VariableInspector
 
 #: QFileDialog에 보여줄 확장자 필터 문자열 (예: "*.png *.jpg *.jpeg *.bmp *.svg").
 _IMAGE_FILE_FILTER = "이미지 파일 (" + " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS) + ")"
@@ -40,6 +44,7 @@ class MainWindow(QMainWindow):
     구조:
         메뉴바 (파일/편집/보기/도움말)
         중앙: DocumentView + DocumentScene (문서 캔버스)
+        오른쪽: 속성 패널 / 변수 목록 패널 (탭으로 겹쳐 있음, 보기 메뉴에서 토글 가능)
         상태바
 
     사용 예:
@@ -59,8 +64,11 @@ class MainWindow(QMainWindow):
         self._is_modified: bool = False
 
         # 메뉴의 "이미지 삽입"/"열기" 등이 self._scene/self._view를 참조하므로
-        # 캔버스를 먼저 만들어야 한다.
+        # 캔버스를 먼저 만들어야 한다. 사이드 패널(속성/변수 목록)도 씬이 있어야
+        # 연결할 수 있으므로 그다음, 메뉴바는 "보기" 메뉴에서 패널을 토글하는
+        # 액션을 넣어야 하니 맨 마지막에 만든다.
         self._create_canvas()
+        self._create_side_panels()
         self._create_menu_bar()
         self.statusBar().showMessage(
             "준비됨 — 더블클릭: 수식 블록 추가 / Ctrl+더블클릭: 텍스트 블록 추가"
@@ -96,6 +104,38 @@ class MainWindow(QMainWindow):
         # 이걸 그대로 "수정 감지"에 활용한다 (선택만 해도 살짝 과민하게 반응할 수
         # 있지만, 실수로 저장 안 하고 닫는 것보다는 훨씬 안전한 쪽을 택함).
         self._scene.changed.connect(self._on_scene_changed)
+
+    def _create_side_panels(self) -> None:
+        """오른쪽에 속성 패널과 변수 목록 패널을 도킹 창으로 배치한다."""
+        self._property_panel = PropertyPanel()
+        self._property_dock = QDockWidget("속성", self)
+        self._property_dock.setWidget(self._property_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._property_dock)
+
+        self._variable_inspector = VariableInspector()
+        self._variable_inspector.set_scene(self._scene)
+        self._variable_inspector.block_activated.connect(self._on_variable_activated)
+        self._variable_dock = QDockWidget("변수 목록", self)
+        self._variable_dock.setWidget(self._variable_inspector)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._variable_dock)
+
+        # 같은 자리에 위아래로 쌓인 두 패널을 탭으로 겹쳐서, 필요할 때 골라 보게 한다.
+        self.tabifyDockWidget(self._property_dock, self._variable_dock)
+        self._property_dock.raise_()
+
+        # 캔버스에서 블록을 클릭/선택 해제할 때마다 속성 패널이 그 블록을 보여주게 한다.
+        self._scene.selectionChanged.connect(self._on_selection_changed)
+
+    def _on_selection_changed(self) -> None:
+        """캔버스 선택이 바뀌면 속성 패널에 반영한다 (블록 하나만 선택됐을 때만 표시)."""
+        selected = [item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)]
+        self._property_panel.show_block(selected[0] if len(selected) == 1 else None)
+
+    def _on_variable_activated(self, block: MathBlock) -> None:
+        """변수 목록에서 항목을 더블클릭하면, 그 변수를 정의한 블록으로 캔버스를 이동한다."""
+        self._view.centerOn(block)
+        self._scene.clearSelection()
+        block.setSelected(True)
 
     def _create_menu_bar(self) -> None:
         """
@@ -136,9 +176,15 @@ class MainWindow(QMainWindow):
         export_pdf_action = file_menu.addAction("PDF로 내보내기(&P)...")
         export_pdf_action.triggered.connect(self._on_export_pdf)
 
-        for title in ("편집(&E)", "보기(&V)", "도움말(&H)"):
-            menu = menu_bar.addMenu(title)
-            self._add_placeholder(menu)
+        edit_menu = menu_bar.addMenu("편집(&E)")
+        self._add_placeholder(edit_menu)
+
+        view_menu = menu_bar.addMenu("보기(&V)")
+        view_menu.addAction(self._property_dock.toggleViewAction())
+        view_menu.addAction(self._variable_dock.toggleViewAction())
+
+        help_menu = menu_bar.addMenu("도움말(&H)")
+        self._add_placeholder(help_menu)
 
     def _add_placeholder(self, menu: QMenu) -> None:
         """메뉴에 "(구현 예정)" 비활성 항목을 하나 추가한다."""
@@ -148,10 +194,15 @@ class MainWindow(QMainWindow):
     # --- 수정 감지 / 창 제목 ---
 
     def _on_scene_changed(self, _regions: list) -> None:
-        """캔버스에 뭔가 변화가 생기면 "수정됨" 표시를 하고 창 제목을 갱신한다."""
+        """캔버스에 뭔가 변화가 생기면 "수정됨" 표시를 하고, 속성 패널 값도 최신으로 맞춘다."""
         if not self._is_modified:
             self._is_modified = True
             self._update_window_title()
+
+        # 선택된 블록을 드래그해서 옮기는 중에도 속성 패널의 X/Y가 따라가도록 갱신한다.
+        current = self._property_panel.current_block()
+        if current is not None:
+            self._property_panel.show_block(current)
 
     def _update_window_title(self) -> None:
         """창 제목을 "[*]파일명 - EngCalc" 형태로 갱신한다."""

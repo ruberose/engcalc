@@ -85,3 +85,22 @@ def test_load_blocks_list_skips_unknown_block_type():
     ]
     scene.load_blocks_list(blocks_data)
     assert len(scene.items()) == 1
+
+
+def test_math_block_preferred_display_unit_round_trips():
+    """속성 패널에서 지정한 표시 단위(display_unit)도 저장/복원되어야 한다 (Phase 7)."""
+    scene = DocumentScene()
+    block = MathBlock(position=(0, 0))
+    block.set_input_text("p = 200000 Pa")
+    scene.addItem(block)
+    scene.recalculate_all()
+    block.set_preferred_unit("kPa")
+
+    data = block.serialize()
+    assert data["display_unit"] == "kPa"
+
+    restored_scene = DocumentScene()
+    restored_scene.load_blocks_list([data])
+    restored_block = [i for i in restored_scene.items() if isinstance(i, MathBlock)][0]
+
+    assert restored_block.preferred_unit() == "kPa"

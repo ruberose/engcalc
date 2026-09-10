@@ -6,7 +6,9 @@
 이 씬은 "격자 배경 + 블록 생성" 이라는 캔버스 차원의 책임만 진다.
 """
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from typing import Any
+
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QPainter, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
@@ -40,10 +42,16 @@ class DocumentScene(QGraphicsScene):
         # (Ctrl+더블클릭이면 텍스트 블록)
     """
 
+    #: recalculate_all()이 끝나서 변수 목록이 새로 갱신될 때마다 울린다.
+    #: ui/variable_inspector.py가 이 신호를 구독해서 목록을 다시 그린다.
+    variables_changed = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setSceneRect(0, 0, SCENE_WIDTH, SCENE_HEIGHT)
         self._grid_visible = True
+        self._scope = Scope()
+        self._variable_blocks: dict[str, MathBlock] = {}
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         """배경을 그린다. 평소엔 격자까지, PDF 내보내기 중엔 흰 배경만(격자는 인쇄 안 함)."""
@@ -167,7 +175,28 @@ class DocumentScene(QGraphicsScene):
             블록이 많아져 성능 문제가 생기면 그때 부분 재계산으로 최적화한다.
         """
         scope = Scope()
+        variable_blocks: dict[str, MathBlock] = {}
+
         math_blocks = [item for item in self.items() if isinstance(item, MathBlock)]
         math_blocks.sort(key=lambda block: (block.pos().y(), block.pos().x()))
         for block in math_blocks:
             block.evaluate(scope)
+            result = block.result()
+            if result is not None and not result.is_error and result.variable_name is not None:
+                variable_blocks[result.variable_name] = block
+
+        self._scope = scope
+        self._variable_blocks = variable_blocks
+        self.variables_changed.emit()
+
+    def variables(self) -> dict[str, Any]:
+        """
+        가장 최근 recalculate_all() 기준으로, 현재 문서에 정의된 변수 이름 -> 값.
+
+        ui/variable_inspector.py가 이걸로 변수 목록을 그린다.
+        """
+        return self._scope.as_dict()
+
+    def block_for_variable(self, name: str) -> MathBlock | None:
+        """주어진 이름의 변수를 정의한 MathBlock을 반환한다. 없으면 None."""
+        return self._variable_blocks.get(name)

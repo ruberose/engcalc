@@ -84,8 +84,11 @@ class BaseBlock(QGraphicsItem):
             자식 클래스는 이 dict에 자신만의 필드(content, style 등)를 추가해서 반환한다.
 
         Note:
-            io/file_manager.py(Phase 5)는 이 dict만 다루고, BaseBlock 객체 자체는
-            알지 못한다 — 모듈 분리 원칙에 따라 io/ 패키지가 블록 클래스에 의존하지 않게 하기 위함.
+            file_io/file_manager.py(Phase 5)는 이 dict만 다루고, BaseBlock 객체 자체는
+            알지 못한다 — 모듈 분리 원칙에 따라 file_io/ 패키지가 블록 클래스에 의존하지 않게 하기 위함.
+            (참고: 애초에 이 패키지 이름을 "io"로 하지 않은 이유— Python 3.11+는 io 같은 표준
+            라이브러리 모듈을 인터프리터에 frozen 상태로 미리 넣어둬서, 같은 이름의 로컬 패키지가
+            무조건 가려진다. 실제로 Phase 5에서 이 문제가 터져서 file_io로 이름을 바꿨다.)
         """
         return {
             "type": self.BLOCK_TYPE,

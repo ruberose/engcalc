@@ -10,6 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QPainter, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
+from blocks.base_block import BaseBlock
 from blocks.image_block import ImageBlock, load_pixmap_from_file
 from blocks.math_block import MathBlock
 from blocks.text_block import TextBlock
@@ -19,6 +20,13 @@ from engine.scope import Scope
 #: 새 문서 캔버스의 크기(px). 무한 캔버스는 아니지만 실무 계산서 하나 담기엔 충분히 크다.
 SCENE_WIDTH = 4000
 SCENE_HEIGHT = 4000
+
+#: 저장 파일의 "type" 문자열 -> 블록 클래스. load_blocks_list()가 블록을 복원할 때 사용한다.
+_BLOCK_CLASSES: dict[str, type[BaseBlock]] = {
+    TextBlock.BLOCK_TYPE: TextBlock,
+    MathBlock.BLOCK_TYPE: MathBlock,
+    ImageBlock.BLOCK_TYPE: ImageBlock,
+}
 
 
 class DocumentScene(QGraphicsScene):
@@ -95,6 +103,39 @@ class DocumentScene(QGraphicsScene):
         block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap)
         self.addItem(block)
         return block
+
+    def to_blocks_list(self) -> list[dict]:
+        """
+        캔버스 위 모든 블록을 저장용 dict 리스트로 만든다.
+
+        Note:
+            문서 전체 메타데이터(제목, 작성자, 버전 등)는 이 씬이 알 필요가 없는
+            "파일" 개념이므로 다루지 않는다 — app/main_window.py가 이 리스트를
+            받아 {"version", "metadata", "blocks"} 구조로 감싼다.
+        """
+        return [item.serialize() for item in self.items() if isinstance(item, BaseBlock)]
+
+    def load_blocks_list(self, blocks: list[dict]) -> None:
+        """
+        블록 dict 리스트로 캔버스를 새로 채운다.
+
+        Args:
+            blocks: to_blocks_list()가 만든 것과 같은 구조의 리스트
+
+        Note:
+            기존에 캔버스에 있던 블록은 모두 지운다("새로 만들기"/"파일 열기" 공용).
+            알 수 없는 "type"(예: 이후 버전에서 추가된 블록을 예전 버전이 여는 경우)은
+            조용히 건너뛴다 — 앱을 죽이는 대신 나머지 블록만이라도 복원하기 위함.
+        """
+        self.clear()
+        for block_data in blocks:
+            block_class = _BLOCK_CLASSES.get(block_data.get("type"))
+            if block_class is None:
+                continue
+            block = block_class(block_id=block_data.get("id"))
+            block.deserialize(block_data)
+            self.addItem(block)
+        self.recalculate_all()
 
     def recalculate_all(self) -> None:
         """

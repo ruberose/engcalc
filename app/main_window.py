@@ -21,6 +21,7 @@ from blocks.image_block import SUPPORTED_EXTENSIONS
 from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
+from file_io.pdf_exporter import export_to_pdf
 
 #: QFileDialog에 보여줄 확장자 필터 문자열 (예: "*.png *.jpg *.jpeg *.bmp *.svg").
 _IMAGE_FILE_FILTER = "이미지 파일 (" + " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS) + ")"
@@ -130,6 +131,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         insert_image_action = file_menu.addAction("이미지 삽입(&I)...")
         insert_image_action.triggered.connect(self._on_insert_image)
+
+        file_menu.addSeparator()
+        export_pdf_action = file_menu.addAction("PDF로 내보내기(&P)...")
+        export_pdf_action.triggered.connect(self._on_export_pdf)
 
         for title in ("편집(&E)", "보기(&V)", "도움말(&H)"):
             menu = menu_bar.addMenu(title)
@@ -317,3 +322,38 @@ class MainWindow(QMainWindow):
         block = self._scene.create_image_block_from_file(visible_center, file_path)
         if block is None:
             self.statusBar().showMessage(f"이미지를 불러올 수 없습니다: {file_path}", 5000)
+
+    # --- PDF 내보내기 ---
+
+    def _on_export_pdf(self) -> None:
+        """
+        파일 선택 대화상자를 띄워 현재 문서를 PDF로 내보낸다.
+
+        Note:
+            선택된 블록이 있으면 점선 테두리/크기조절 손잡이까지 PDF에 찍히므로
+            내보내기 전에 선택을 해제한다. 격자 배경도 인쇄용으로는 지저분해
+            보이므로 내보내는 동안만 꺼둔다(scene.set_grid_visible).
+        """
+        default_name = Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+        file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self, "PDF로 내보내기", f"{default_name}.pdf", "PDF 파일 (*.pdf)"
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".pdf"):
+            file_path += ".pdf"
+
+        self._scene.clearSelection()
+        self._scene.set_grid_visible(False)
+        try:
+            exported = export_to_pdf(self._scene, file_path, title=default_name)
+        except OSError as exc:
+            QMessageBox.critical(self, "PDF 내보내기 실패", f"PDF를 저장할 수 없습니다:\n{file_path}\n\n{exc}")
+            return
+        finally:
+            self._scene.set_grid_visible(True)
+
+        if exported:
+            self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
+        else:
+            QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 PDF를 만들지 않았습니다.")

@@ -7,14 +7,14 @@
 """
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QPainter, QTransform
+from PySide6.QtGui import QBrush, QPainter, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
 from blocks.base_block import BaseBlock
 from blocks.image_block import ImageBlock, load_pixmap_from_file
 from blocks.math_block import MathBlock
 from blocks.text_block import TextBlock
-from canvas.grid import draw_grid
+from canvas.grid import BACKGROUND_COLOR, draw_grid
 from engine.scope import Scope
 
 #: 새 문서 캔버스의 크기(px). 무한 캔버스는 아니지만 실무 계산서 하나 담기엔 충분히 크다.
@@ -43,10 +43,26 @@ class DocumentScene(QGraphicsScene):
     def __init__(self) -> None:
         super().__init__()
         self.setSceneRect(0, 0, SCENE_WIDTH, SCENE_HEIGHT)
+        self._grid_visible = True
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
-        """배경 격자를 그린다 (실제 계산은 canvas/grid.py에 위임)."""
-        draw_grid(painter, rect)
+        """배경을 그린다. 평소엔 격자까지, PDF 내보내기 중엔 흰 배경만(격자는 인쇄 안 함)."""
+        if self._grid_visible:
+            draw_grid(painter, rect)
+        else:
+            painter.fillRect(rect, QBrush(BACKGROUND_COLOR))
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """
+        격자 배경을 켜고 끈다.
+
+        Note:
+            PDF 내보내기(file_io/pdf_exporter.py)는 이 씬을 그대로 QPainter에
+            렌더링하는 방식을 쓰는데, 화면용 격자선까지 인쇄되면 지저분해 보이므로
+            내보내는 동안만 잠깐 꺼둔다.
+        """
+        self._grid_visible = visible
+        self.update()
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         """

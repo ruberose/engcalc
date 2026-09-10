@@ -5,7 +5,13 @@
 평소에는 자신이 직접 텍스트를 그리다가(paint), 더블클릭하면
 편집용 QGraphicsTextItem을 잠깐 덧씌워서 편집시키고, 편집이 끝나면
 그 내용을 다시 자기 것으로 흡수하는 방식으로 동작한다.
+
+위첨자/아래첨자는 "^{내용}"/"_{내용}" 마크업으로 쓴다 (예: "x^{2}",
+"sigma_{허용}"). MathBlock의 수식 표기(^, _)와 같은 관례라 외우기 쉽고,
+mathtext처럼 ASCII만 되는 제약 없이 한글도 위/아래첨자로 쓸 수 있다.
 """
+
+import re
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
@@ -24,6 +30,34 @@ DEFAULT_FONT_SIZE = 14
 DEFAULT_TEXT = "텍스트를 입력하세요"
 TEXT_PADDING = 4
 
+# --- 위첨자/아래첨자 ---
+# "^{...}" -> 위첨자, "_{...}" -> 아래첨자. 중괄호 안에는 { } 를 직접 못 넣는다
+# (여러 글자를 한 번에 위/아래첨자로 묶어 쓰기 위한 것이라 이 정도 제약은 괜찮음).
+_SCRIPT_PATTERN = re.compile(r"\^\{([^{}]*)\}|_\{([^{}]*)\}")
+_SCRIPT_FONT_SCALE = 0.65  # 위/아래첨자 글자 크기 비율 (본문 대비)
+_SUPERSCRIPT_RAISE_RATIO = 0.35  # 본문 줄 높이 대비, 위로 띄우는 비율
+_SUBSCRIPT_LOWER_RATIO = 0.15  # 본문 줄 높이 대비, 아래로 내리는 비율
+
+
+def _tokenize_script_markup(text: str) -> list[tuple[str, str]]:
+    """
+    "x^{2} + y_{허용}" 같은 텍스트를 (종류, 내용) 토큰 리스트로 쪼갠다.
+
+    종류는 "normal"(보통 글자), "super"(위첨자), "sub"(아래첨자) 중 하나.
+    빈 문자열을 넣으면 [("normal", "")] 하나를 돌려준다(빈 줄도 자리는 차지해야 하므로).
+    """
+    tokens: list[tuple[str, str]] = []
+    pos = 0
+    for match in _SCRIPT_PATTERN.finditer(text):
+        if match.start() > pos:
+            tokens.append(("normal", text[pos : match.start()]))
+        super_text, sub_text = match.groups()
+        tokens.append(("super", super_text) if super_text is not None else ("sub", sub_text))
+        pos = match.end()
+    if pos < len(text) or not tokens:
+        tokens.append(("normal", text[pos:]))
+    return tokens
+
 
 class _InlineTextEditor(QGraphicsTextItem):
     """
@@ -32,6 +66,10 @@ class _InlineTextEditor(QGraphicsTextItem):
     QGraphicsTextItem은 자체적으로 커서·선택·IME 입력을 다 처리해주므로,
     편집 UI를 직접 구현하는 대신 이 표준 위젯을 빌려 쓰고,
     포커스를 잃는 순간(focusOutEvent) 부모 TextBlock에게 "편집 끝났다"고 알려준다.
+
+    편집 중에는 "x^{2}" 같은 마크업을 있는 그대로(가공 없이) 보여준다 —
+    미리보기 없이 원문을 직접 타이핑하는 게, 어떤 마크업이 뭘 만드는지
+    가장 명확하게 보여주는 방법이라고 판단했다.
     """
 
     def __init__(self, parent_block: "TextBlock") -> None:
@@ -49,12 +87,13 @@ class TextBlock(BaseBlock):
     자유 서식 텍스트 블록.
 
     구조:
-        평상시: paint()가 self._text를 직접 그림 (가볍고 빠름)
-        편집 중: _InlineTextEditor 자식 아이템이 화면을 덮고 실제 입력을 받음
+        평상시: paint()가 self._text를 해석해서 직접 그림 (가볍고 빠름).
+                "^{...}"/"_{...}" 마크업은 위/아래첨자로 그려진다.
+        편집 중: _InlineTextEditor 자식 아이템이 화면을 덮고 원문 그대로 입력을 받음
 
     사용 예:
         block = TextBlock(position=(100, 50))
-        block.set_text("1. 설계조건")
+        block.set_text("sigma_{허용} = 24 MPa")   # "허용"이 아래첨자로 표시됨
         scene.addItem(block)
         # 캔버스에서 더블클릭하면 바로 수정 가능
     """
@@ -93,7 +132,7 @@ class TextBlock(BaseBlock):
         self.update()
 
     def text(self) -> str:
-        """현재 텍스트 내용을 반환한다."""
+        """현재 텍스트 내용을 반환한다 (위/아래첨자 마크업이 포함된 원문)."""
         return self._text
 
     def is_bold(self) -> bool:
@@ -105,21 +144,73 @@ class TextBlock(BaseBlock):
         return self._font_size
 
     def _font(self) -> QFont:
-        """현재 서식(굵기/크기)이 반영된 QFont를 만든다."""
+        """현재 서식(굵기/크기)이 반영된 본문용 QFont를 만든다."""
         font = QFont()
         font.setPointSize(self._font_size)
         font.setBold(self._bold)
         return font
 
+    def _script_font(self) -> QFont:
+        """위/아래첨자용 QFont — 본문보다 작다(굵기는 본문과 맞춤)."""
+        font = QFont()
+        font.setPointSize(max(6, round(self._font_size * _SCRIPT_FONT_SCALE)))
+        font.setBold(self._bold)
+        return font
+
+    def _layout(self) -> tuple[float, float, list[tuple[float, float, QFont, str]]]:
+        """
+        현재 텍스트(위/아래첨자 마크업 포함)를 해석해서 그리기 좋은 형태로 만든다.
+
+        Returns:
+            (전체 너비, 전체 높이, [(x, y, 폰트, 글자) ...]) — y는 이 블록의
+            로컬 좌표계에서 각 조각을 그릴 베이스라인 위치(TEXT_PADDING 더하기 전).
+        """
+        font_normal = self._font()
+        font_script = self._script_font()
+        metrics_normal = QFontMetrics(font_normal)
+        metrics_script = QFontMetrics(font_script)
+
+        baseline = float(metrics_normal.ascent())
+        min_top = baseline - metrics_normal.ascent()
+        max_bottom = baseline + metrics_normal.descent()
+
+        raw_segments: list[tuple[float, float, QFont, str]] = []
+        x = 0.0
+        for kind, content in _tokenize_script_markup(self._text or " "):
+            if kind == "normal":
+                raw_segments.append((x, baseline, font_normal, content))
+                min_top = min(min_top, baseline - metrics_normal.ascent())
+                max_bottom = max(max_bottom, baseline + metrics_normal.descent())
+                x += metrics_normal.horizontalAdvance(content)
+                continue
+
+            if kind == "super":
+                y = baseline - metrics_normal.height() * _SUPERSCRIPT_RAISE_RATIO
+            else:  # "sub"
+                y = baseline + metrics_normal.height() * _SUBSCRIPT_LOWER_RATIO
+            raw_segments.append((x, y, font_script, content))
+            min_top = min(min_top, y - metrics_script.ascent())
+            max_bottom = max(max_bottom, y + metrics_script.descent())
+            x += metrics_script.horizontalAdvance(content)
+
+        width = max(x, 1.0)
+        height = max_bottom - min_top
+
+        # min_top이 음수면(위첨자가 원래 글자 위로 삐져나간 경우) 전부 아래로
+        # 밀어서 y가 항상 0 이상이 되게 한다 — boundingRect가 실제로 그려지는
+        # 영역을 전부 담도록 하기 위함.
+        shift = -min_top
+        segments = [(sx, sy + shift, sf, st) for sx, sy, sf, st in raw_segments]
+        return width, height, segments
+
     # --- QGraphicsItem 필수 구현 ---
 
     def boundingRect(self) -> QRectF:  # noqa: N802
         """현재 텍스트를 현재 폰트로 그렸을 때 필요한 사각형 영역."""
-        metrics = QFontMetrics(self._font())
-        text_rect = metrics.boundingRect(self._text or " ")
-        width = max(text_rect.width() + TEXT_PADDING * 2, 40)
-        height = max(text_rect.height() + TEXT_PADDING * 2, 24)
-        return QRectF(0, 0, width, height)
+        width, height, _segments = self._layout()
+        total_width = max(width + TEXT_PADDING * 2, 40)
+        total_height = max(height + TEXT_PADDING * 2, 24)
+        return QRectF(0, 0, total_width, total_height)
 
     def paint(
         self,
@@ -135,11 +226,14 @@ class TextBlock(BaseBlock):
         # 흰 배경(canvas/grid.py) 위에 글자가 안 보이는 문제가 생긴다.
         # 캔버스는 항상 종이처럼 밝게 유지할 것이므로 글자색을 검정으로 고정한다.
         painter.setPen(QColor(0, 0, 0))
-        painter.setFont(self._font())
-        painter.drawText(self.boundingRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._text)
+        _width, _height, segments = self._layout()
+        for x, y, font, content in segments:
+            painter.setFont(font)
+            painter.drawText(TEXT_PADDING + x, TEXT_PADDING + y, content)
 
         if self.isSelected():
             pen = painter.pen()
+            pen.setColor(QColor(0, 0, 0))
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(self.boundingRect())
@@ -193,7 +287,7 @@ class TextBlock(BaseBlock):
     # --- 직렬화 ---
 
     def serialize(self) -> dict:
-        """공통 필드(BaseBlock) + 텍스트 내용/서식을 함께 담는다."""
+        """공통 필드(BaseBlock) + 텍스트 내용(마크업 포함)/서식을 함께 담는다."""
         data = super().serialize()
         data["content"] = self._text
         data["style"] = {"font_size": self._font_size, "bold": self._bold}

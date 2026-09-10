@@ -29,6 +29,7 @@ import pint
 
 from blocks.base_block import BaseBlock
 from engine.evaluator import EvalResult, evaluate
+from engine.parser import strip_trailing_calculator_equals
 from engine.scope import Scope
 from engine.unit_manager import Quantity
 from rendering.math_renderer import render_to_pixmap
@@ -124,12 +125,18 @@ class MathBlock(BaseBlock):
         입력 수식 원문을 바꾸고 미리보기용 이미지(또는 대체 텍스트)를 다시 만든다.
 
         Note:
+            계산기 습관대로 끝에 붙인 "="(예: "A + B =")는 여기서 미리 지운다.
+            engine.evaluator도 계산할 때 그 "="를 무시하긴 하지만, 화면에 보여줄
+            self._input_text 자체에서 안 지우면 "A + B ="라는 입력 줄 끝의 "="와
+            그 아래 "= 10m" 결과 줄의 "="가 나란히 보여서 등호가 두 번 있는
+            것처럼 보였다(버그체크 중 발견).
+
             여기서는 텍스트만 바꿀 뿐 재계산은 하지 않는다. 재계산은 이 블록만이
             아니라 전체 문서 순서에 영향을 주므로, DocumentScene.recalculate_all()이
             모든 MathBlock을 순서대로 evaluate()해야 한다 (계획서 5.1 계산 순서 규칙).
         """
-        self._input_text = text
-        self._input_pixmap, self._input_fallback = _render_line(text)
+        self._input_text = strip_trailing_calculator_equals(text)
+        self._input_pixmap, self._input_fallback = _render_line(self._input_text)
         self.prepareGeometryChange()
         self.update()
 

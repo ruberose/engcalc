@@ -27,6 +27,22 @@ class ParsedInput:
     expression_text: str
 
 
+def strip_trailing_calculator_equals(text: str) -> str:
+    """
+    계산기 습관대로 맨 끝에 "="만 붙이는 경우(예: "32mm + 42mm =")의 그 trailing
+    "="를 지운다. 이 프로그램은 "="를 안 눌러도 자동으로 계산되므로 필요 없다.
+
+    ==, <=, >=, != 의 일부인 '='는 건드리지 않는다.
+
+    Note:
+        blocks/math_block.py도 이 함수를 그대로 써서, 계산에 넘기는 수식뿐 아니라
+        화면에 표시하는 입력 원문 자체에서도 이 trailing "="를 지운다 — 안 그러면
+        입력 줄 끝의 "="와 그 아래 결과 줄의 "="가 겹쳐 보여서 등호가 두 번
+        있는 것처럼 보이는 문제가 있었다(버그체크 중 발견).
+    """
+    return _TRAILING_EQUALS_PATTERN.sub("", text).rstrip()
+
+
 def parse_input(text: str) -> ParsedInput:
     """
     입력 문자열이 "이름 = 수식" 형태면 (이름, 수식)으로, 아니면 (None, 전체)로 나눈다.
@@ -43,14 +59,12 @@ def parse_input(text: str) -> ParsedInput:
         parse_input("sigma == sigma_허용")  -> ParsedInput(None, "sigma == sigma_허용")
         parse_input("32mm + 42mm =")       -> ParsedInput(None, "32mm + 42mm")
     """
+    text = strip_trailing_calculator_equals(text)
+
     match = _ASSIGNMENT_PATTERN.match(text)
     if match:
         variable_name, expression_text = match.groups()
     else:
         variable_name, expression_text = None, text
-
-    # 계산기 습관대로 끝에 "="만 남기고 입력하는 경우가 있어, 그런 trailing "="는
-    # 그냥 무시하고 앞부분만 계산한다 (이 프로그램은 "="를 안 눌러도 자동 계산됨).
-    expression_text = _TRAILING_EQUALS_PATTERN.sub("", expression_text).rstrip()
 
     return ParsedInput(variable_name=variable_name, expression_text=expression_text)

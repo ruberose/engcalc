@@ -36,7 +36,7 @@ from blocks.base_block import BaseBlock
 from engine.evaluator import EvalResult, evaluate
 from engine.parser import strip_trailing_calculator_equals
 from engine.scope import Scope
-from engine.unit_manager import Quantity
+from engine.unit_manager import Quantity, format_unit_expression
 from rendering.math_renderer import render_to_pixmap
 
 # --- 서식 상수 ---
@@ -411,13 +411,18 @@ class MathBlock(BaseBlock):
             return None
 
         value = self._result.value
+        unit_text_override = None
         if self._preferred_unit and isinstance(value, Quantity):
             try:
                 value = value.to(self._preferred_unit)
+                # Pint의 기본 포맷터는 복합 단위를 항상 정해진 순서로 재배열해서
+                # 보여준다("tonf*m"이라고 입력해도 "m*tf"로 앞뒤가 바뀌는 버그가
+                # 있었다) — 사용자가 입력한 순서를 그대로 지키려면 직접 포맷해야 한다.
+                unit_text_override = format_unit_expression(self._preferred_unit)
             except (pint.errors.DimensionalityError, pint.errors.UndefinedUnitError):
                 pass  # 호환되지 않거나 알 수 없는 단위면 조용히 무시하고 원래 값을 보여준다
 
-        formatted = format_value(value)
+        formatted = format_value(value, unit_text_override=unit_text_override)
         if _strip_spaces(self._input_text).endswith(_strip_spaces(formatted)):
             # "a = 100" 처럼 입력 자체가 이미 값이면 중복 표시하지 않는다.
             # 공백은 무시하고 비교한다 — format_value()는 숫자와 단위 사이에 항상
@@ -604,8 +609,19 @@ class MathBlock(BaseBlock):
         self.set_input_text(data.get("expression", ""))
 
 
-def format_value(value) -> str:
-    """계산 결과를 사람이 읽기 좋은 문자열로 바꾼다."""
+def format_value(value, unit_text_override: str | None = None) -> str:
+    """
+    계산 결과를 사람이 읽기 좋은 문자열로 바꾼다.
+
+    Args:
+        value: 계산 결과 (숫자, bool, 또는 Quantity)
+        unit_text_override: 단위 부분에 이 문자열을 그대로 쓴다. 지정 안 하면
+            Pint의 기본 포맷터(~P)로 단위를 만든다 — 단, 이 기본 포맷터는
+            복합 단위의 순서를 사용자가 입력한 대로 지켜주지 않으므로(예:
+            "tonf*m"을 넣어도 "m·tf"로 뒤바뀜), 순서를 지켜야 할 때는
+            engine.unit_manager.format_unit_expression()으로 만든 문자열을
+            여기 넘긴다 (blocks/math_block.py의 _result_line_text 참고).
+    """
     if isinstance(value, bool):
         return "True" if value else "False"
     if isinstance(value, Quantity):
@@ -613,7 +629,7 @@ def format_value(value) -> str:
         # "몇 mm인지" 같은 단위 없는 숫자로의 변환은 의미가 불분명하기 때문).
         # magnitude(숫자)와 units(단위)를 따로 포맷해서 합친다.
         magnitude_text = _format_number(value.magnitude)
-        unit_text = f"{value.units:~P}"
+        unit_text = unit_text_override if unit_text_override is not None else f"{value.units:~P}"
         return f"{magnitude_text} {unit_text}".strip()
     return _format_number(value)
 

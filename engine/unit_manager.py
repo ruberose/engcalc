@@ -128,3 +128,39 @@ def simplify(quantity: Quantity) -> Quantity:
         quantity = quantity.to(canonical)
 
     return quantity.to_compact()
+
+
+# 단위 하나 또는 "*"/"/" 토큰을 순서대로 뽑아낸다. format_unit_expression()에서
+# 사용자가 입력한 순서를 그대로 지키면서 각 조각만 예쁜 기호로 바꾸는 데 쓴다.
+_UNIT_TOKEN_PATTERN = re.compile(r"([*/])|([A-Za-z][A-Za-z0-9]*(?:\^\d+)?)")
+
+
+def format_unit_expression(unit_text: str) -> str:
+    """
+    단위 문자열(예: "tonf*m")을 사용자가 쓴 순서 그대로 지키면서 Pint의 예쁜
+    기호(예: "tf·m")로 바꾼다.
+
+    Args:
+        unit_text: "tonf*m", "kg/m^3" 같은 단위 문자열
+
+    Returns:
+        각 조각을 개별적으로 Pint 기호로 바꿔 원래 순서대로 이어붙인 문자열.
+        알 수 없는 조각은 원래 글자 그대로 남긴다.
+
+    Note:
+        Pint의 기본 포맷터(~P)는 복합 단위를 통째로 넘기면 내부 정렬 규칙대로
+        재배열해서 보여준다 — "tonf*m"이라고 입력해도 결과가 "m·tf"로 앞뒤가
+        뒤바뀌어 나오는 문제가 있었다(버그 리포트로 발견). 전체를 한 번에
+        포맷하는 대신 토큰(단위/연산자) 단위로 쪼개 각각 따로 포맷한 뒤 원래
+        순서로 다시 이어붙이면 이 문제를 피할 수 있다.
+    """
+    parts: list[str] = []
+    for operator, unit_word in _UNIT_TOKEN_PATTERN.findall(unit_text):
+        if operator:
+            parts.append("·" if operator == "*" else operator)
+            continue
+        try:
+            parts.append(f"{ureg.parse_units(unit_word):~P}")
+        except Exception:  # noqa: BLE001 - 알 수 없는 조각은 원래 글자 그대로 보여줌
+            parts.append(unit_word)
+    return "".join(parts)

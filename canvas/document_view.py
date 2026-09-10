@@ -126,9 +126,20 @@ class DocumentView(QGraphicsView):
         super().keyReleaseEvent(event)
 
     def _delete_selected_blocks(self) -> None:
-        """현재 선택된 모든 블록을 캔버스에서 제거한다."""
+        """
+        현재 선택된 모든 블록을 캔버스에서 제거한다.
+
+        Note:
+            삭제한 블록이 수식 블록이고 변수를 정의하고 있었다면, 그 변수를
+            참조하던 다른 블록들은 재계산해주기 전까지 삭제 전 값을 그대로
+            보여주게 된다("정의되지 않은 변수" 에러가 안 뜨고 옛날 값이 남음).
+            그래서 삭제 후에는 항상 recalculate_all()로 전체를 다시 계산한다
+            (변수 목록도 이걸 계기로 같이 갱신됨 - variables_changed 신호).
+        """
         scene = self.scene()
         if scene is None:
             return
         for item in scene.selectedItems():
             scene.removeItem(item)
+        if hasattr(scene, "recalculate_all"):
+            scene.recalculate_all()

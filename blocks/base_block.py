@@ -60,6 +60,8 @@ class BaseBlock(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
 
+        self._position_changed_since_press = False
+
         self.setPos(*position)
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt 오버라이드 메서드는 camelCase 유지)
@@ -118,3 +120,35 @@ class BaseBlock(QGraphicsItem):
         이 메서드를 재정의해서 자신만의 편집 진입 로직을 구현한다.
         """
         super().mouseDoubleClickEvent(event)
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # noqa: N802
+        """위치가 실제로 바뀌면 표시해둔다 (mouseReleaseEvent에서 재계산 여부를 판단할 때 씀)."""
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self._position_changed_since_press = True
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        """드래그 시작 시점을 표시해서, 이번 드래그로 실제 위치가 바뀌었는지 추적을 시작한다."""
+        self._position_changed_since_press = False
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        """
+        드래그가 끝났을 때, 실제로 위치가 바뀌었다면 문서 전체를 다시 계산한다.
+
+        Note:
+            블록은 화면상 위치(위→아래, 왼→오른) 순서로 계산되므로(계획서 5.1),
+            드래그로 블록 순서 자체가 바뀔 수 있다. 수식 내용은 그대로여도
+            "어떤 변수를 먼저/나중에 정의했는지"가 바뀌면 결과가 달라져야 하는데,
+            지금까지는 텍스트를 편집(finish_editing)하거나 블록을 삭제할 때만
+            재계산했고 "그냥 옮기기"는 빠져 있었다 — 그 buggy 케이스를 여기서 메운다.
+            매 픽셀(mouseMoveEvent)마다가 아니라 마우스를 뗄 때 한 번만 하므로
+            드래그 도중 버벅이지 않는다.
+        """
+        super().mouseReleaseEvent(event)
+        if not self._position_changed_since_press:
+            return
+        self._position_changed_since_press = False
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "recalculate_all"):
+            scene.recalculate_all()

@@ -53,15 +53,32 @@ PLACEHOLDER_COLOR = QColor(160, 160, 160)
 _HANDLE_SIZE = 10.0
 _MIN_WIDTH = 80.0
 
+#: 곱셈은 계산("*")에는 그대로 필요하지만, 실제 수식 표기처럼 화면에는
+#: 가운뎃점으로 보여준다 (engine/unit_manager.format_unit_expression이
+#: 복합 단위에 쓰는 것과 같은 문자 — 이미 검증된 방식이라 그대로 재사용).
+_MULTIPLICATION_DOT = "·"
+
 
 def _strip_spaces(text: str) -> str:
     """공백을 전부 지운다 ("5M"과 "5 M"을 같은 것으로 비교하기 위한 용도)."""
     return re.sub(r"\s+", "", text)
 
 
+def _display_text(text: str) -> str:
+    """
+    화면에 보여줄 때만 "*"를 곱셈 기호(가운뎃점)로 바꾼다.
+
+    Note:
+        계산(engine.evaluator.evaluate)에 넘어가는 self._input_text 원문은
+        건드리지 않는다 — SymPy 파서는 "*"를 곱셈 연산자로 기대하므로,
+        여기서 바뀐 문자열은 오직 렌더링(_render_line)에만 쓰여야 한다.
+    """
+    return text.replace("*", _MULTIPLICATION_DOT)
+
+
 def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap | None, str | None]:
     """
-    한 줄을 mathtext로 렌더링해본다.
+    한 줄을 mathtext로 렌더링해본다 ("*"는 화면 표시용 가운뎃점으로 바꿔서).
 
     Returns:
         (pixmap, None): mathtext 렌더링 성공 — pixmap을 그대로 그리면 됨
@@ -70,9 +87,10 @@ def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap |
     """
     if not text.strip():
         return None, None
-    pixmap = render_to_pixmap(text, font_size)
+    display = _display_text(text)
+    pixmap = render_to_pixmap(display, font_size)
     if pixmap.isNull():
-        return None, text
+        return None, display
     return pixmap, None
 
 

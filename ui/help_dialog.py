@@ -27,7 +27,8 @@ _HELP_HTML = """
 <p>입력은 <code>a = 100</code>처럼 대입하거나, <code>a * 2 + 1</code>처럼 바로 계산합니다.
 블록은 화면 위→아래, 왼→오른 순서로 계산되며, 위에서 정의한 변수를 아래 블록이 이어받습니다.</p>
 <ul>
-<li>연산자: <code>+ - * / ^ %</code>, 비교 <code>&lt; &gt; &lt;= &gt;= ==</code></li>
+<li>연산자: <code>+ - * / ^ %</code>, 비교 <code>&lt; &gt; &lt;= &gt;= ==</code>
+(곱하기는 <code>*</code>로 입력하지만 화면엔 실제 수식처럼 <code>·</code>로 표시됩니다)</li>
 <li>함수: <code>sin cos tan asin acos atan sinh cosh tanh exp log ln log10 log2 sqrt cbrt root abs round ceil floor</code>
 (삼각함수는 <b>도(degree)</b> 기준, 라디안 아님)</li>
 <li>상수: <code>pi</code>, <code>e</code></li>

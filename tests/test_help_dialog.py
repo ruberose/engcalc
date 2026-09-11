@@ -43,6 +43,25 @@ def test_help_dialog_has_content():
     dialog.close()
 
 
+def test_help_dialog_documents_calculation_level():
+    """
+    사용자 요청: "어느 수준까지 되는지 나한테 알려주고, 도움말에도 추가해줘"
+
+    diff(x^2, x)식 "기호식" 계산은 안 되고, limit/solve/integrate(정적분)/Sum
+    처럼 결과가 숫자로 떨어지는 고급 계산은 된다는 걸 실제로 evaluate()로
+    확인했으므로(engine/evaluator.py), 그 사실이 도움말에도 반영되어 있는지
+    확인한다.
+    """
+    dialog = HelpDialog()
+    text = dialog.findChild(QTextBrowser).toPlainText()
+    assert "SymPy" in text
+    assert "limit" in text
+    assert "integrate" in text
+    assert "diff" in text
+    assert "기호식" in text  # 안 되는 것에 대한 설명이 있어야 함
+    dialog.close()
+
+
 def test_show_help_creates_and_shows_dialog(window):
     """메뉴/단축키로 _on_show_help()를 부르면 도움말 창이 뜨고 내용이 보여야 한다."""
     assert window._help_dialog is None

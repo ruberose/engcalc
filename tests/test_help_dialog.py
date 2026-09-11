@@ -63,6 +63,20 @@ def test_basic_usage_tab_has_content():
     dialog.close()
 
 
+def test_basic_usage_tab_documents_autosave():
+    """
+    사용자 요청: "제일 먼저 만들어야 하는 자동저장기능을 만들어보자"
+
+    자동 저장/비정상 종료 복구 기능이 "기본 사용법" 탭에 안내되어 있는지 확인한다.
+    """
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    basic_text = tabs.widget(0).toPlainText()
+    assert "자동 저장" in basic_text
+    assert "비정상 종료" in basic_text
+    dialog.close()
+
+
 def test_formula_syntax_tab_has_content():
     """"수식 작성법" 탭은 연산자/함수/첨자 문법 내용을 담고 있어야 한다."""
     dialog = HelpDialog()

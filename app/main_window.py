@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QKeySequence
 from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMenu, QMessageBox
 
-from app.settings import add_recent_file, get_recent_files
+from app.settings import add_recent_file, autosave_file_path, get_recent_files
 from blocks.base_block import BaseBlock
 from blocks.image_block import SUPPORTED_EXTENSIONS
 from blocks.math_block import MathBlock
@@ -36,6 +36,10 @@ _FILE_EXTENSION = ".engcalc"
 _FILE_FILTER = "EngCalc 문서 (*.engcalc)"
 _DOCUMENT_VERSION = "1.0"
 _DEFAULT_TITLE = "제목 없음"
+
+#: 자동 저장 주기(밀리초). 이 주기마다 깨어나서 "저장 안 한 변경사항이
+#: 있으면" 자동 저장한다(변경이 없으면 아무것도 안 씀).
+_AUTOSAVE_INTERVAL_MS = 60_000
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +67,7 @@ class MainWindow(QMainWindow):
         self._current_file_path: str | None = None
         self._created_at: str = datetime.now().isoformat()
         self._is_modified: bool = False
+        self._recovered_from_autosave: bool = False  # 복구된 내용이면 "수정됨" 표시를 지우면 안 됨
         self._help_dialog: HelpDialog | None = None  # 도움말 창은 처음 열 때 한 번만 만든다
 
         # 메뉴의 "이미지 삽입"/"열기" 등이 self._scene/self._view를 참조하므로
@@ -76,6 +81,14 @@ class MainWindow(QMainWindow):
             "준비됨 — 더블클릭: 수식 블록 추가 / Ctrl+더블클릭: 텍스트 블록 추가"
         )
         self._update_window_title()
+        self._check_autosave_recovery()
+
+        # 자동 저장 타이머. 주기적으로 깨어나서 "저장 안 한 변경사항이 있으면"만
+        # 실제로 자동 저장 파일을 쓴다(_on_autosave_tick).
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(_AUTOSAVE_INTERVAL_MS)
+        self._autosave_timer.timeout.connect(self._on_autosave_tick)
+        self._autosave_timer.start()
 
         # QGraphicsScene.changed는 최초 화면이 그려질 때도 한 번 울린다(빈 캔버스를
         # 처음 페인트하는 것도 "변경"으로 잡히기 때문). 그걸 실제 사용자 수정으로
@@ -83,7 +96,16 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._reset_modified_flag)
 
     def _reset_modified_flag(self) -> None:
-        """초기 렌더링으로 인해 잘못 켜진 "수정됨" 표시를 끈다."""
+        """
+        초기 렌더링으로 인해 잘못 켜진 "수정됨" 표시를 끈다.
+
+        Note:
+            자동 저장 내용을 복구한 직후라면 건너뛴다 — 복구된 내용은 아직
+            실제 파일에 저장된 게 아니므로, "수정됨(*)" 표시가 그대로 남아
+            사용자에게 저장을 유도해야 한다.
+        """
+        if self._recovered_from_autosave:
+            return
         self._is_modified = False
         self._update_window_title()
 
@@ -306,6 +328,79 @@ class MainWindow(QMainWindow):
         mark = "*" if self._is_modified else ""
         self.setWindowTitle(f"{mark}{name} - EngCalc")
 
+    # --- 자동 저장 / 비정상 종료 복구 ---
+
+    def _check_autosave_recovery(self) -> None:
+        """
+        시작할 때 자동 저장 파일이 남아있으면 복구할지 물어본다.
+
+        Note:
+            정상적으로 저장/새 문서/파일 열기/종료를 하면 _clear_autosave()가
+            이 파일을 지운다. 그러니 다음 실행 때 이 파일이 남아있다는 것
+            자체가 "지난번에 비정상 종료됐다"는 신호다.
+        """
+        path = autosave_file_path()
+        if not Path(path).exists():
+            return
+
+        try:
+            data = load_document(path)
+            blocks = data.get("blocks", [])
+            if not isinstance(blocks, list):
+                raise ValueError("blocks가 리스트가 아님")
+        except (OSError, json.JSONDecodeError, ValueError):
+            Path(path).unlink(missing_ok=True)  # 손상된 자동 저장 파일은 조용히 버림
+            return
+
+        original_path = data.get("metadata", {}).get("original_file_path")
+        label = Path(original_path).stem if original_path else _DEFAULT_TITLE
+        choice = QMessageBox.question(
+            self,
+            "복구할 내용이 있습니다",
+            f'이전에 비정상적으로 종료된 것 같습니다.\n자동 저장된 내용("{label}")을 복구할까요?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            Path(path).unlink(missing_ok=True)
+            return
+
+        self._scene.load_blocks_list(blocks)
+        self._current_file_path = original_path
+        self._created_at = data.get("metadata", {}).get("created", datetime.now().isoformat())
+        self._recovered_from_autosave = True
+        self._is_modified = True
+        self._update_window_title()
+        self.statusBar().showMessage("자동 저장된 내용을 복구했습니다 — 확인 후 저장해주세요", 5000)
+
+    def _on_autosave_tick(self) -> None:
+        """자동 저장 타이머가 주기적으로 부른다. 저장 안 한 변경사항이 있을 때만 실제로 쓴다."""
+        if self._is_modified:
+            self._write_autosave()
+
+    def _write_autosave(self) -> None:
+        """지금 문서 상태를 자동 저장 파일에 써둔다 (사용자가 실제로 저장하는 파일과는 별개)."""
+        data: dict[str, Any] = {
+            "version": _DOCUMENT_VERSION,
+            "metadata": {
+                "title": Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE,
+                "created": self._created_at,
+                "modified": datetime.now().isoformat(),
+                # 복구했을 때 원래 파일로 되돌려 저장할 수 있도록 원본 경로도 같이 적어둔다.
+                "original_file_path": self._current_file_path,
+            },
+            "blocks": self._scene.to_blocks_list(),
+        }
+        try:
+            save_document(data, autosave_file_path())
+        except OSError:
+            pass  # 자동 저장 실패는 조용히 넘어간다 — 다음 주기에 다시 시도됨
+
+    def _clear_autosave(self) -> None:
+        """자동 저장 파일을 지운다. 정상적으로 저장/새 문서/열기/종료했을 때 부른다."""
+        Path(autosave_file_path()).unlink(missing_ok=True)
+        self._recovered_from_autosave = False
+
     # --- 새로 만들기 / 열기 / 저장 ---
 
     def _on_new_document(self) -> None:
@@ -316,6 +411,7 @@ class MainWindow(QMainWindow):
         self._current_file_path = None
         self._created_at = datetime.now().isoformat()
         self._is_modified = False
+        self._clear_autosave()  # 이전 문서의 자동 저장 내용은 더 이상 의미가 없음
         self._update_window_title()
         self.statusBar().showMessage("새 문서", 3000)
         # load_blocks_list()가 발생시키는 scene.changed도 "진짜 수정"이 아니므로,
@@ -353,6 +449,7 @@ class MainWindow(QMainWindow):
         self._created_at = metadata.get("created", datetime.now().isoformat())
         self._current_file_path = file_path
         self._is_modified = False
+        self._clear_autosave()  # 방금 진짜 파일을 열었으니 이전 자동 저장 내용은 의미가 없음
 
         add_recent_file(file_path)
         self._rebuild_recent_files_menu()
@@ -397,6 +494,7 @@ class MainWindow(QMainWindow):
 
         self._current_file_path = file_path
         self._is_modified = False
+        self._clear_autosave()  # 진짜 파일에 저장했으니 자동 저장 내용은 더 이상 필요 없음
         add_recent_file(file_path)
         self._rebuild_recent_files_menu()
         self._update_window_title()
@@ -430,6 +528,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """창을 닫으려 할 때, 저장 안 한 변경사항이 있으면 먼저 확인한다."""
         if self._confirm_discard_changes():
+            self._clear_autosave()  # 정상적으로 닫는 것이므로 다음 실행 때 복구할 필요 없음
             event.accept()
         else:
             event.ignore()

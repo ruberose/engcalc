@@ -37,6 +37,18 @@ _UNIT_LOCALS = {"__quantity__": make_quantity}
 # 에러 취급한다.
 _INVALID_NUMERIC_VALUES = (sympy.zoo, sympy.nan, sympy.oo, -sympy.oo)
 
+# 이 프로그램은 LaTeX 문법을 지원하지 않는다 — 계산 엔진(SymPy의 Python식
+# 파서)은 백슬래시 명령어("\frac", "\sqrt" 등)나 중괄호 그룹핑("x^{10}")을
+# 전혀 이해하지 못한다. 그냥 두면 "unexpected character after line
+# continuation character" 같은 파이썬 내부 에러 메시지가 그대로 노출되거나
+# ("x^{10}"처럼) 엉뚱하게 파싱되어 더 헷갈리는 에러가 나므로, 이런 문자가
+# 보이면 먼저 걸러서 무엇을 대신 써야 하는지 알려준다.
+_LATEX_MARKUP_CHARS = ("\\", "{", "}")
+_LATEX_NOT_SUPPORTED_MESSAGE = (
+    "LaTeX 문법(\\, {, })은 지원하지 않습니다. "
+    "예: \\sqrt{x} 대신 sqrt(x), \\frac{a}{b} 대신 a/b, x^{10} 대신 x^10 을 사용하세요."
+)
+
 
 @dataclass
 class EvalResult:
@@ -74,6 +86,9 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
 
     if not parsed.expression_text.strip():
         return EvalResult(variable_name=parsed.variable_name)
+
+    if any(ch in parsed.expression_text for ch in _LATEX_MARKUP_CHARS):
+        return EvalResult(variable_name=parsed.variable_name, error=_LATEX_NOT_SUPPORTED_MESSAGE)
 
     try:
         expression_text = attach_units(parsed.expression_text)

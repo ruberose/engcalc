@@ -1,19 +1,26 @@
 """
 도움말(사용법) 대화상자 검증.
 
-사용자 요청: "메뉴얼도 좀 만들어 줘라... 상단 메뉴바에서 누르고 들어가면
-도움말이 뜨도록."
+사용자 요청:
+- "메뉴얼도 좀 만들어 줘라... 상단 메뉴바에서 누르고 들어가면 도움말이 뜨도록."
+- "도움말에 두가지 페이지를 만들어서 1. 기본 사용법, 2. 이 프로그램에서
+  적용되는 수식작성법"
 """
 
 import gc
 
 import pytest
-from PySide6.QtWidgets import QApplication, QTextBrowser
+from PySide6.QtWidgets import QApplication, QTabWidget, QTextBrowser
 
 from app.main_window import MainWindow
 from ui.help_dialog import HelpDialog
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _all_pages_text(dialog: HelpDialog) -> str:
+    """도움말 창의 모든 탭(페이지) 내용을 하나로 합쳐서 반환한다 (검색용)."""
+    return "\n".join(browser.toPlainText() for browser in dialog.findChildren(QTextBrowser))
 
 
 @pytest.fixture
@@ -34,12 +41,35 @@ def window():
     _app.processEvents()
 
 
-def test_help_dialog_has_content():
-    """도움말 창은 빈 내용이 아니어야 한다."""
+def test_help_dialog_has_two_tabs():
+    """도움말은 "기본 사용법"/"수식 작성법" 두 페이지(탭)로 나뉘어 있어야 한다."""
     dialog = HelpDialog()
-    text = dialog.findChild(QTextBrowser).toPlainText()
-    assert "수식 블록" in text
-    assert "Ctrl+Z" in text
+    tabs = dialog.findChild(QTabWidget)
+    assert tabs is not None
+    assert tabs.count() == 2
+    titles = [tabs.tabText(i) for i in range(tabs.count())]
+    assert "기본 사용법" in titles
+    assert "수식 작성법" in titles
+    dialog.close()
+
+
+def test_basic_usage_tab_has_content():
+    """"기본 사용법" 탭은 블록 조작/단축키 내용을 담고 있어야 한다."""
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    basic_text = tabs.widget(0).toPlainText()
+    assert "더블클릭" in basic_text
+    assert "Ctrl+Z" in basic_text
+    dialog.close()
+
+
+def test_formula_syntax_tab_has_content():
+    """"수식 작성법" 탭은 연산자/함수/첨자 문법 내용을 담고 있어야 한다."""
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    formula_text = tabs.widget(1).toPlainText()
+    assert "아래첨자" in formula_text
+    assert "F_y" in formula_text
     dialog.close()
 
 
@@ -53,12 +83,43 @@ def test_help_dialog_documents_calculation_level():
     확인한다.
     """
     dialog = HelpDialog()
-    text = dialog.findChild(QTextBrowser).toPlainText()
+    text = _all_pages_text(dialog)
     assert "SymPy" in text
     assert "limit" in text
     assert "integrate" in text
     assert "diff" in text
     assert "기호식" in text  # 안 되는 것에 대한 설명이 있어야 함
+    dialog.close()
+
+
+def test_help_dialog_documents_latex_not_supported():
+    """
+    사용자 요청: "라텍스 문법은 아예 고려하지 말고 사용하자. 헷갈리지 않도록
+    아예 없애버리는게 낫겠어."
+
+    LaTeX 문법이 지원되지 않는다는 사실과, 그 대신 무엇을 써야 하는지(예:
+    sqrt(x))가 도움말에 안내되어 있는지 확인한다.
+    """
+    dialog = HelpDialog()
+    text = _all_pages_text(dialog)
+    assert "LaTeX" in text
+    assert "지원하지 않" in text
+    assert "sqrt(x)" in text
+    dialog.close()
+
+
+def test_formula_syntax_tab_documents_correct_subscript_rule():
+    """
+    이전엔 "sigma_{allow}"처럼 중괄호로 여러 글자를 묶는 수식 블록 첨자가
+    된다고 잘못 안내했었다(실제로는 계산이 안 됨 — LaTeX 취급되어 거부됨).
+    지금은 "한 글자만 자동 첨자, 중괄호 묶음은 지원 안 함"이 정확히
+    안내되어야 한다.
+    """
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    formula_text = tabs.widget(1).toPlainText()
+    assert "sigma_{allow}" not in formula_text  # 잘못된 예시가 남아있으면 안 됨
+    assert "지원하지 않습니다" in formula_text
     dialog.close()
 
 

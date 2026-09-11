@@ -24,6 +24,7 @@ from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
 from file_io.pdf_exporter import export_to_pdf
+from ui.help_dialog import HelpDialog
 from ui.property_panel import PropertyPanel
 from ui.variable_inspector import VariableInspector
 
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self._current_file_path: str | None = None
         self._created_at: str = datetime.now().isoformat()
         self._is_modified: bool = False
+        self._help_dialog: HelpDialog | None = None  # 도움말 창은 처음 열 때 한 번만 만든다
 
         # 메뉴의 "이미지 삽입"/"열기" 등이 self._scene/self._view를 참조하므로
         # 캔버스를 먼저 만들어야 한다. 사이드 패널(속성/변수 목록)도 씬이 있어야
@@ -205,7 +207,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._variable_dock.toggleViewAction())
 
         help_menu = menu_bar.addMenu("도움말(&H)")
-        self._add_placeholder(help_menu)
+        help_action = help_menu.addAction("EngCalc 사용법(&U)...")
+        help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
+        help_action.triggered.connect(self._on_show_help)
 
     def _add_placeholder(self, menu: QMenu) -> None:
         """메뉴에 "(구현 예정)" 비활성 항목을 하나 추가한다."""
@@ -509,3 +513,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
         else:
             QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 PDF를 만들지 않았습니다.")
+
+    # --- 도움말 ---
+
+    def _on_show_help(self) -> None:
+        """
+        도움말(사용법) 대화상자를 연다.
+
+        Note:
+            처음 열 때만 만들고 이후에는 재사용한다. 모달이 아니라 show()로
+            띄워서, 사용법을 보면서 동시에 캔버스에서 타이핑할 수 있게 한다.
+        """
+        if self._help_dialog is None:
+            self._help_dialog = HelpDialog(self)
+        self._help_dialog.show()
+        self._help_dialog.raise_()
+        self._help_dialog.activateWindow()

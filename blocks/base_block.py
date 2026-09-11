@@ -61,6 +61,7 @@ class BaseBlock(QGraphicsItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
 
         self._position_changed_since_press = False
+        self._undo_snapshot_before_move: list[dict] | None = None
 
         self.setPos(*position)
 
@@ -128,13 +129,23 @@ class BaseBlock(QGraphicsItem):
         return super().itemChange(change, value)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
-        """드래그 시작 시점을 표시해서, 이번 드래그로 실제 위치가 바뀌었는지 추적을 시작한다."""
+        """
+        드래그 시작 시점을 표시해서, 이번 드래그로 실제 위치가 바뀌었는지 추적을 시작한다.
+
+        동시에 지금 상태를 실행취소용으로 미리 캡처해둔다. 실제로 옮겨졌는지는
+        떼는 순간에야 알 수 있으므로, 캡처만 해두고 기록(commit)은
+        mouseReleaseEvent에서 한다 — 그냥 클릭(드래그 없음)이면 이 캡처는 버려진다.
+        """
         self._position_changed_since_press = False
+        scene = self.scene()
+        self._undo_snapshot_before_move = (
+            scene.capture_undo_snapshot() if scene is not None and hasattr(scene, "capture_undo_snapshot") else None
+        )
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         """
-        드래그가 끝났을 때, 실제로 위치가 바뀌었다면 문서 전체를 다시 계산한다.
+        드래그가 끝났을 때, 실제로 위치가 바뀌었다면 실행취소를 기록하고 문서 전체를 다시 계산한다.
 
         Note:
             블록은 화면상 위치(위→아래, 왼→오른) 순서로 계산되므로(계획서 5.1),
@@ -147,8 +158,13 @@ class BaseBlock(QGraphicsItem):
         """
         super().mouseReleaseEvent(event)
         if not self._position_changed_since_press:
+            self._undo_snapshot_before_move = None
             return
         self._position_changed_since_press = False
         scene = self.scene()
-        if scene is not None and hasattr(scene, "recalculate_all"):
-            scene.recalculate_all()
+        if scene is not None:
+            if self._undo_snapshot_before_move is not None and hasattr(scene, "commit_undo_snapshot"):
+                scene.commit_undo_snapshot(self._undo_snapshot_before_move)
+            if hasattr(scene, "recalculate_all"):
+                scene.recalculate_all()
+        self._undo_snapshot_before_move = None

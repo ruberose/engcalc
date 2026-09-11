@@ -160,36 +160,56 @@ class PropertyPanel(QWidget):
 
     # --- 내부: 화면 -> 블록 ---
 
+    def _apply_with_undo(self, mutate, recalc: bool = False) -> None:
+        """
+        블록을 바꾸는 동작(mutate)을 실행하고, 실제로 뭔가 달라졌으면 실행취소에 기록한다.
+
+        Args:
+            mutate: 블록 속성을 실제로 바꾸는 인자 없는 콜러블.
+            recalc: True면 변경 후 scene.recalculate_all()도 호출한다(위치 변경처럼
+                계산 순서에 영향을 줄 수 있는 경우만 — 굵게/글자크기/단위 표시 같은
+                건 계산에 영향이 없으므로 기본값 False로 둔다).
+        """
+        scene = self._block.scene() if self._block is not None else None
+        before = scene.capture_undo_snapshot() if scene is not None and hasattr(scene, "capture_undo_snapshot") else None
+
+        mutate()
+
+        if scene is None:
+            return
+        if before is not None and hasattr(scene, "commit_undo_snapshot"):
+            scene.commit_undo_snapshot(before)
+        if recalc and hasattr(scene, "recalculate_all"):
+            scene.recalculate_all()
+
     def _on_position_changed(self, _value: float) -> None:
         if self._updating or self._block is None:
             return
-        self._block.setPos(self._x_spin.value(), self._y_spin.value())
-
         # 블록은 화면 위→아래 순서로 계산되므로(계획서 5.1), 여기서 위치를 바꿔
         # 순서가 뒤집히면 재계산해야 한다. 마우스로 드래그할 때는 BaseBlock이
         # 드래그가 "끝날 때" 한 번만 재계산하지만(blocks/base_block.py), 이 스핀박스는
         # 마우스 이벤트를 거치지 않고 setPos()를 직접 호출하므로 그 경로를 안 탄다
         # — 그래서 여기서 직접 요청해야 한다(버그체크 중 발견).
-        scene = self._block.scene()
-        if scene is not None and hasattr(scene, "recalculate_all"):
-            scene.recalculate_all()
+        self._apply_with_undo(
+            lambda: self._block.setPos(self._x_spin.value(), self._y_spin.value()), recalc=True
+        )
 
     def _on_size_changed(self, _value: float) -> None:
         if self._updating or not isinstance(self._block, ImageBlock):
             return
-        self._block.set_size(self._width_spin.value(), self._height_spin.value())
+        self._apply_with_undo(lambda: self._block.set_size(self._width_spin.value(), self._height_spin.value()))
 
     def _on_bold_changed(self, checked: bool) -> None:
         if self._updating or not isinstance(self._block, TextBlock):
             return
-        self._block.set_bold(checked)
+        self._apply_with_undo(lambda: self._block.set_bold(checked))
 
     def _on_font_size_changed(self, _value: float) -> None:
         if self._updating or not isinstance(self._block, TextBlock):
             return
-        self._block.set_font_size(int(self._font_size_spin.value()))
+        self._apply_with_undo(lambda: self._block.set_font_size(int(self._font_size_spin.value())))
 
     def _on_unit_changed(self) -> None:
         if self._updating or not isinstance(self._block, MathBlock):
             return
-        self._block.set_preferred_unit(self._unit_edit.text())
+        self._apply_with_undo(lambda: self._block.set_preferred_unit(self._unit_edit.text()))

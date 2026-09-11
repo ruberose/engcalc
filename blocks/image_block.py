@@ -99,6 +99,7 @@ class ImageBlock(BaseBlock):
         self._resizing = False
         self._resize_start_mouse = None
         self._resize_start_size = (0.0, 0.0)
+        self._undo_snapshot_before_resize: list[dict] | None = None
 
     def set_size(self, width: float, height: float) -> None:
         """
@@ -167,6 +168,10 @@ class ImageBlock(BaseBlock):
             self._resizing = True
             self._resize_start_mouse = event.scenePos()
             self._resize_start_size = (self._width, self._height)
+            scene = self.scene()
+            self._undo_snapshot_before_resize = (
+                scene.capture_undo_snapshot() if scene is not None and hasattr(scene, "capture_undo_snapshot") else None
+            )
             event.accept()
             return
         super().mousePressEvent(event)
@@ -184,6 +189,10 @@ class ImageBlock(BaseBlock):
         if self._resizing:
             self._resizing = False
             self._resize_start_mouse = None
+            scene = self.scene()
+            if scene is not None and self._undo_snapshot_before_resize is not None and hasattr(scene, "commit_undo_snapshot"):
+                scene.commit_undo_snapshot(self._undo_snapshot_before_resize)
+            self._undo_snapshot_before_resize = None
             event.accept()
             return
         super().mouseReleaseEvent(event)

@@ -9,7 +9,7 @@ DocumentScene의 몫이고, 이 클래스는 사용자 입력을 어떻게 캔�
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QKeyEvent, QPainter, QWheelEvent
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsTextItem, QGraphicsView
 
 from blocks.image_block import SUPPORTED_EXTENSIONS
 
@@ -110,9 +110,12 @@ class DocumentView(QGraphicsView):
             return
 
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            # 씬의 focusItem()이 있다는 것은 텍스트 블록이 편집 중이라는 뜻이다.
-            # 그럴 땐 Delete/Backspace가 "글자 지우기"로 쓰여야 하므로 블록 삭제를 하지 않는다.
-            if self.scene() is not None and self.scene().focusItem() is None:
+            # focusItem()이 실제 편집기(QGraphicsTextItem)일 때만 "텍스트 편집 중"이다.
+            # (블록 자신도 클릭만으로 focusItem이 될 수 있어서, 단순히 focusItem이
+            # 있는지 없는지만으로는 편집 중인지 판단할 수 없다.) 편집 중이면
+            # Delete/Backspace가 "글자 지우기"로 쓰여야 하므로 블록 삭제를 하지 않는다.
+            scene = self.scene()
+            if scene is not None and not isinstance(scene.focusItem(), QGraphicsTextItem):
                 self._delete_selected_blocks()
                 return
 
@@ -139,7 +142,13 @@ class DocumentView(QGraphicsView):
         scene = self.scene()
         if scene is None:
             return
-        for item in scene.selectedItems():
+        selected = scene.selectedItems()
+        if not selected:
+            return
+        before = scene.capture_undo_snapshot() if hasattr(scene, "capture_undo_snapshot") else None
+        for item in selected:
             scene.removeItem(item)
+        if before is not None and hasattr(scene, "commit_undo_snapshot"):
+            scene.commit_undo_snapshot(before)
         if hasattr(scene, "recalculate_all"):
             scene.recalculate_all()

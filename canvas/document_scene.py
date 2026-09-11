@@ -23,6 +23,12 @@ from engine.scope import Scope
 SCENE_WIDTH = 4000
 SCENE_HEIGHT = 4000
 
+#: 실행취소 스택에 담아둘 최대 단계 수. 너무 많이 쌓이면 메모리만 차지하므로 제한한다.
+MAX_UNDO_STEPS = 50
+
+#: 붙여넣은 블록을 원본과 겹치지 않게 어긋나게 놓는 거리(px).
+_PASTE_OFFSET = 20.0
+
 #: 저장 파일의 "type" 문자열 -> 블록 클래스. load_blocks_list()가 블록을 복원할 때 사용한다.
 _BLOCK_CLASSES: dict[str, type[BaseBlock]] = {
     TextBlock.BLOCK_TYPE: TextBlock,
@@ -52,6 +58,14 @@ class DocumentScene(QGraphicsScene):
         self._grid_visible = True
         self._scope = Scope()
         self._variable_blocks: dict[str, MathBlock] = {}
+
+        # --- 실행취소 / 다시실행 / 클립보드 ---
+        # 문서 전체를 to_blocks_list()로 스냅샷 떠서 스택에 쌓는 방식이다.
+        # 블록별로 "무슨 동작이었는지"를 따로 기록하는 대신, 파일 저장/불러오기에
+        # 이미 쓰는 (검증된) 직렬화 골격을 그대로 재사용해서 단순하게 구현했다.
+        self._undo_stack: list[list[dict]] = []
+        self._redo_stack: list[list[dict]] = []
+        self._clipboard: list[dict] = []
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
         """배경을 그린다. 평소엔 격자까지, PDF 내보내기 중엔 흰 배경만(격자는 인쇄 안 함)."""
@@ -97,17 +111,28 @@ class DocumentScene(QGraphicsScene):
         event.accept()
 
     def _create_text_block(self, scene_pos: QPointF) -> TextBlock:
-        """주어진 씬 좌표에 새 TextBlock을 만들어 캔버스에 추가한다."""
+        """
+        주어진 씬 좌표에 새 TextBlock을 만들어 캔버스에 추가한다.
+
+        Note:
+            생성 직전 상태를 캡처해서 편집기에 넘겨준다 — 만들자마자 바로 타이핑을
+            시작하는 게 이 앱의 관례라, "생성"과 "그 안에 처음 타이핑"을 실행취소
+            한 단계로 묶기 위함이다(따로 기록하면 Ctrl+Z 두 번 눌러야 빈 블록까지
+            깔끔히 사라진다). finish_editing()에서 실제로 뭔가 달라졌을 때만 이
+            스냅샷이 커밋된다.
+        """
+        before = self.capture_undo_snapshot()
         block = TextBlock(position=(scene_pos.x(), scene_pos.y()))
         self.addItem(block)
-        block.start_editing()  # 만들자마자 바로 타이핑할 수 있게 편집 모드로 시작
+        block.start_editing(undo_snapshot=before)  # 만들자마자 바로 타이핑할 수 있게 편집 모드로 시작
         return block
 
     def _create_math_block(self, scene_pos: QPointF) -> MathBlock:
-        """주어진 씬 좌표에 새 MathBlock을 만들어 캔버스에 추가한다."""
+        """주어진 씬 좌표에 새 MathBlock을 만들어 캔버스에 추가한다 (실행취소 처리는 _create_text_block 참고)."""
+        before = self.capture_undo_snapshot()
         block = MathBlock(position=(scene_pos.x(), scene_pos.y()))
         self.addItem(block)
-        block.start_editing()
+        block.start_editing(undo_snapshot=before)
         return block
 
     def create_image_block_from_file(self, scene_pos: QPointF, file_path: str) -> ImageBlock | None:
@@ -124,8 +149,10 @@ class DocumentScene(QGraphicsScene):
         if pixmap.isNull():
             return None
 
+        before = self.capture_undo_snapshot()
         block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap)
         self.addItem(block)
+        self.commit_undo_snapshot(before)
         return block
 
     def to_blocks_list(self) -> list[dict]:
@@ -164,6 +191,108 @@ class DocumentScene(QGraphicsScene):
                 continue  # position 등 필수 필드 누락/형식 오류 - 이 블록만 건너뜀
             self.addItem(block)
         self.recalculate_all()
+
+    # --- 실행취소 / 다시실행 ---
+
+    def capture_undo_snapshot(self) -> list[dict]:
+        """
+        지금 상태를 스냅샷으로 캡처한다 (아직 실행취소 스택에 넣지는 않음).
+
+        Note:
+            드래그·리사이즈처럼 "실제로 뭔가 바뀔 수도, 안 바뀔 수도 있는" 동작은
+            시작 시점에 이 메서드로 미리 캡처해두고, 끝난 뒤 commit_undo_snapshot()에
+            넘겨서 확정한다 (동작이 끝나봐야 "진짜 바뀌었는지" 알 수 있으므로).
+        """
+        return self.to_blocks_list()
+
+    def commit_undo_snapshot(self, before: list[dict]) -> None:
+        """
+        capture_undo_snapshot()으로 받아둔 '이전' 상태를 실행취소 스택에 확정 기록한다.
+
+        Args:
+            before: 변경 시작 전에 capture_undo_snapshot()으로 캡처해둔 스냅샷.
+
+        Note:
+            지금 상태와 비교해서 실제로 달라진 경우에만 기록한다 — 그래야 클릭만
+            하고 아무것도 안 바꿨거나, 손잡이를 눌렀다 그대로 뗀 경우처럼 "아무 일도
+            안 일어난" 동작이 실행취소 기록을 쓸데없이 채우지 않는다.
+        """
+        if before == self.to_blocks_list():
+            return
+        self._undo_stack.append(before)
+        del self._redo_stack[:]
+        if len(self._undo_stack) > MAX_UNDO_STEPS:
+            del self._undo_stack[0]
+
+    def can_undo(self) -> bool:
+        """실행취소할 게 남아있는지."""
+        return bool(self._undo_stack)
+
+    def can_redo(self) -> bool:
+        """다시실행할 게 남아있는지."""
+        return bool(self._redo_stack)
+
+    def undo(self) -> None:
+        """바로 전 실행취소 단계로 되돌린다. 되돌릴 게 없으면 아무 일도 하지 않는다."""
+        if not self._undo_stack:
+            return
+        self._redo_stack.append(self.to_blocks_list())
+        previous = self._undo_stack.pop()
+        self.clearSelection()
+        self.load_blocks_list(previous)
+
+    def redo(self) -> None:
+        """실행취소를 한 단계 되돌린다(다시실행). 되돌릴 게 없으면 아무 일도 하지 않는다."""
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(self.to_blocks_list())
+        following = self._redo_stack.pop()
+        self.clearSelection()
+        self.load_blocks_list(following)
+
+    # --- 복사 / 붙여넣기 ---
+
+    def copy_selected_blocks(self) -> None:
+        """선택된 블록들을 이 씬 안에서만 쓰는 내부 클립보드에 담는다."""
+        self._clipboard = [item.serialize() for item in self.selectedItems() if isinstance(item, BaseBlock)]
+
+    def can_paste(self) -> bool:
+        """붙여넣을 내용이 클립보드에 있는지."""
+        return bool(self._clipboard)
+
+    def paste_blocks(self) -> list[BaseBlock]:
+        """
+        클립보드에 담긴 블록들을 원본에서 약간 어긋난 위치에 새로 만들어 추가한다.
+
+        Note:
+            새 블록은 각자 새로운 id를 받는다(생성자에 block_id를 넘기지 않으므로
+            자동 생성됨) — 원본과 id가 겹치면 안 되기 때문이다. 붙여넣은 블록들만
+            선택 상태로 남겨서, 바로 이어서 옮기거나 삭제하기 편하게 한다.
+        """
+        if not self._clipboard:
+            return []
+
+        before = self.capture_undo_snapshot()
+        self.clearSelection()
+        pasted: list[BaseBlock] = []
+        for block_data in self._clipboard:
+            block_class = _BLOCK_CLASSES.get(block_data.get("type"))
+            if block_class is None:
+                continue
+            block = block_class()
+            try:
+                block.deserialize(block_data)
+            except (KeyError, ValueError, TypeError):
+                continue
+            block.setPos(block.pos().x() + _PASTE_OFFSET, block.pos().y() + _PASTE_OFFSET)
+            self.addItem(block)
+            block.setSelected(True)
+            pasted.append(block)
+
+        if pasted:
+            self.commit_undo_snapshot(before)
+            self.recalculate_all()
+        return pasted
 
     def recalculate_all(self) -> None:
         """

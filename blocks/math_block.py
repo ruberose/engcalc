@@ -170,9 +170,12 @@ class MathBlock(BaseBlock):
         self._resizing = False
         self._resize_start_mouse = None
         self._resize_start_width = 0.0
+        self._undo_snapshot_before_resize: list[dict] | None = None
 
         self._editor: _InlineTextEditor | None = None
         self._unit_editor: _UnitEditor | None = None
+        self._undo_snapshot_before_edit: list[dict] | None = None
+        self._undo_snapshot_before_unit_edit: list[dict] | None = None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
 
@@ -445,6 +448,10 @@ class MathBlock(BaseBlock):
             self._resizing = True
             self._resize_start_mouse = event.scenePos()
             self._resize_start_width = self.boundingRect().width()
+            scene = self.scene()
+            self._undo_snapshot_before_resize = (
+                scene.capture_undo_snapshot() if scene is not None and hasattr(scene, "capture_undo_snapshot") else None
+            )
             event.accept()
             return
         super().mousePressEvent(event)
@@ -461,6 +468,10 @@ class MathBlock(BaseBlock):
         if self._resizing:
             self._resizing = False
             self._resize_start_mouse = None
+            scene = self.scene()
+            if scene is not None and self._undo_snapshot_before_resize is not None and hasattr(scene, "commit_undo_snapshot"):
+                scene.commit_undo_snapshot(self._undo_snapshot_before_resize)
+            self._undo_snapshot_before_resize = None
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -484,10 +495,25 @@ class MathBlock(BaseBlock):
             self.start_editing()
         event.accept()
 
-    def start_editing(self) -> None:
-        """인라인 편집기를 만들어 현재 입력 원문을 채워 넣고 포커스를 준다."""
+    def start_editing(self, undo_snapshot: list[dict] | None = None) -> None:
+        """
+        인라인 편집기를 만들어 현재 입력 원문을 채워 넣고 포커스를 준다.
+
+        Args:
+            undo_snapshot: 이미 캡처해둔 "편집 시작 전" 상태가 있으면 그걸 그대로 쓴다
+                (방금 만들어진 블록 — DocumentScene._create_math_block 참고). 생략하면
+                지금 시점 기준으로 새로 캡처한다(기존 블록을 더블클릭하는 일반적인 경우).
+        """
         if self._editor is not None:
             return
+
+        scene = self.scene()
+        if undo_snapshot is not None:
+            self._undo_snapshot_before_edit = undo_snapshot
+        elif scene is not None and hasattr(scene, "capture_undo_snapshot"):
+            self._undo_snapshot_before_edit = scene.capture_undo_snapshot()
+        else:
+            self._undo_snapshot_before_edit = None
 
         self.prepareGeometryChange()
         self._editor = _InlineTextEditor(self)
@@ -524,6 +550,11 @@ class MathBlock(BaseBlock):
         self.update()
 
         scene = self.scene()
+        # 실제로 뭔가 달라졌을 때만 commit_undo_snapshot() 내부에서 기록된다.
+        if self._undo_snapshot_before_edit is not None and scene is not None and hasattr(scene, "commit_undo_snapshot"):
+            scene.commit_undo_snapshot(self._undo_snapshot_before_edit)
+        self._undo_snapshot_before_edit = None
+
         if scene is not None and hasattr(scene, "recalculate_all"):
             scene.recalculate_all()
 
@@ -553,6 +584,11 @@ class MathBlock(BaseBlock):
             return
         if not self._has_convertible_result():
             return
+
+        scene = self.scene()
+        self._undo_snapshot_before_unit_edit = (
+            scene.capture_undo_snapshot() if scene is not None and hasattr(scene, "capture_undo_snapshot") else None
+        )
 
         self.prepareGeometryChange()
         self._unit_editor = _UnitEditor(self)
@@ -589,6 +625,11 @@ class MathBlock(BaseBlock):
             editor.scene().removeItem(editor)
 
         self.set_preferred_unit(new_unit)
+
+        scene = self.scene()
+        if self._undo_snapshot_before_unit_edit is not None and scene is not None and hasattr(scene, "commit_undo_snapshot"):
+            scene.commit_undo_snapshot(self._undo_snapshot_before_unit_edit)
+        self._undo_snapshot_before_unit_edit = None
 
     # --- 직렬화 ---
 

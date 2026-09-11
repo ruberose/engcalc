@@ -108,6 +108,7 @@ class TextBlock(BaseBlock):
         self._font_size: int = DEFAULT_FONT_SIZE
 
         self._editor: _InlineTextEditor | None = None  # 편집 중일 때만 존재
+        self._undo_snapshot_before_edit: list[dict] | None = None
 
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
 
@@ -245,9 +246,15 @@ class TextBlock(BaseBlock):
         self.start_editing()
         event.accept()
 
-    def start_editing(self) -> None:
+    def start_editing(self, undo_snapshot: list[dict] | None = None) -> None:
         """
         인라인 편집기를 만들어 현재 텍스트를 채워 넣고 포커스를 준다.
+
+        Args:
+            undo_snapshot: 이미 캡처해둔 "편집 시작 전" 상태가 있으면 그걸 그대로 쓴다
+                (예: 방금 만들어진 블록 — DocumentScene._create_text_block 참고).
+                생략하면 지금 이 시점 기준으로 새로 캡처한다(기존 블록을 더블클릭해서
+                편집하는 일반적인 경우).
 
         Note:
             편집 중에는 paint()가 아무것도 그리지 않으므로,
@@ -255,6 +262,14 @@ class TextBlock(BaseBlock):
         """
         if self._editor is not None:
             return
+
+        scene = self.scene()
+        if undo_snapshot is not None:
+            self._undo_snapshot_before_edit = undo_snapshot
+        elif scene is not None and hasattr(scene, "capture_undo_snapshot"):
+            self._undo_snapshot_before_edit = scene.capture_undo_snapshot()
+        else:
+            self._undo_snapshot_before_edit = None
 
         self.update()
         self._editor = _InlineTextEditor(self)
@@ -283,6 +298,13 @@ class TextBlock(BaseBlock):
             editor.scene().removeItem(editor)
 
         self.update()
+
+        # 실제로 뭔가 달라졌을 때만 commit_undo_snapshot() 내부에서 기록된다
+        # (아무 내용도 안 바꾸고 편집만 들어갔다 나오면 실행취소 기록이 늘지 않는다).
+        scene = self.scene()
+        if self._undo_snapshot_before_edit is not None and scene is not None and hasattr(scene, "commit_undo_snapshot"):
+            scene.commit_undo_snapshot(self._undo_snapshot_before_edit)
+        self._undo_snapshot_before_edit = None
 
     # --- 직렬화 ---
 

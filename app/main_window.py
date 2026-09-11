@@ -14,7 +14,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QKeySequence
-from PySide6.QtWidgets import QDockWidget, QFileDialog, QMainWindow, QMenu, QMessageBox
+from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMenu, QMessageBox
 
 from app.settings import add_recent_file, get_recent_files
 from blocks.base_block import BaseBlock
@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         """캔버스 선택이 바뀌면 속성 패널에 반영한다 (블록 하나만 선택됐을 때만 표시)."""
         selected = [item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)]
         self._property_panel.show_block(selected[0] if len(selected) == 1 else None)
+        self._update_edit_menu_state()
 
     def _on_variable_activated(self, block: MathBlock) -> None:
         """변수 목록에서 항목을 더블클릭하면, 그 변수를 정의한 블록으로 캔버스를 이동한다."""
@@ -177,7 +178,27 @@ class MainWindow(QMainWindow):
         export_pdf_action.triggered.connect(self._on_export_pdf)
 
         edit_menu = menu_bar.addMenu("편집(&E)")
-        self._add_placeholder(edit_menu)
+
+        self._undo_action = edit_menu.addAction("실행 취소(&U)")
+        self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self._undo_action.triggered.connect(self._on_undo)
+
+        self._redo_action = edit_menu.addAction("다시 실행(&R)")
+        self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self._redo_action.triggered.connect(self._on_redo)
+
+        edit_menu.addSeparator()
+
+        self._copy_action = edit_menu.addAction("복사(&C)")
+        self._copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self._copy_action.triggered.connect(self._on_copy)
+
+        self._paste_action = edit_menu.addAction("붙여넣기(&P)")
+        self._paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        self._paste_action.triggered.connect(self._on_paste)
+
+        edit_menu.aboutToShow.connect(self._update_edit_menu_state)
+        self._update_edit_menu_state()
 
         view_menu = menu_bar.addMenu("보기(&V)")
         view_menu.addAction(self._property_dock.toggleViewAction())
@@ -191,6 +212,71 @@ class MainWindow(QMainWindow):
         placeholder = menu.addAction("(구현 예정)")
         placeholder.setEnabled(False)
 
+    # --- 편집: 실행취소 / 다시실행 / 복사 / 붙여넣기 ---
+
+    def _is_editing_text(self) -> bool:
+        """
+        지금 어떤 블록이든 텍스트 편집 중인지 확인한다.
+
+        Note:
+            MathBlock/TextBlock 자신도 ItemIsFocusable이라, 그냥 클릭만 해도
+            (편집 모드로 들어가지 않아도) scene.focusItem()이 그 블록 자신이 될 수
+            있다 — 그래서 "focusItem이 있냐 없냐"만으로는 편집 중인지 판단할 수
+            없다. 실제 편집기(_InlineTextEditor/_UnitEditor)는 모두 QGraphicsTextItem
+            서브클래스이고 블록 자신(BaseBlock)은 QGraphicsItem이라 겹치지 않으므로,
+            focusItem이 QGraphicsTextItem인지로 정확히 구분한다.
+        """
+        return isinstance(self._scene.focusItem(), QGraphicsTextItem)
+
+    def _on_undo(self) -> None:
+        """
+        실행취소 메뉴/단축키(Ctrl+Z) 처리.
+
+        Note:
+            블록을 편집 중일 때는 Ctrl+Z가 편집기 자체의 텍스트 실행취소로 쓰이는 게
+            자연스러우므로, 문서 단위 실행취소는 편집 중이 아닐 때만 동작한다.
+        """
+        if self._is_editing_text():
+            return
+        self._scene.undo()
+        self._update_edit_menu_state()
+
+    def _on_redo(self) -> None:
+        """다시실행 메뉴/단축키(Ctrl+Y) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        self._scene.redo()
+        self._update_edit_menu_state()
+
+    def _on_copy(self) -> None:
+        """
+        복사 메뉴/단축키(Ctrl+C) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유).
+
+        Note:
+            복사는 화면을 바꾸지 않아 scene.changed가 안 울리므로, 붙여넣기 항목의
+            활성 상태(can_paste())를 반영하려면 여기서 직접 갱신해야 한다.
+        """
+        if self._is_editing_text():
+            return
+        self._scene.copy_selected_blocks()
+        self._update_edit_menu_state()
+
+    def _on_paste(self) -> None:
+        """붙여넣기 메뉴/단축키(Ctrl+V) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        pasted = self._scene.paste_blocks()
+        if pasted:
+            self.statusBar().showMessage(f"{len(pasted)}개 블록을 붙여넣었습니다", 2000)
+        self._update_edit_menu_state()
+
+    def _update_edit_menu_state(self) -> None:
+        """편집 메뉴가 열릴 때마다(aboutToShow) 각 항목의 활성/비활성 상태를 갱신한다."""
+        self._undo_action.setEnabled(self._scene.can_undo())
+        self._redo_action.setEnabled(self._scene.can_redo())
+        self._copy_action.setEnabled(bool(self._scene.selectedItems()))
+        self._paste_action.setEnabled(self._scene.can_paste())
+
     # --- 수정 감지 / 창 제목 ---
 
     def _on_scene_changed(self, _regions: list) -> None:
@@ -203,6 +289,12 @@ class MainWindow(QMainWindow):
         current = self._property_panel.current_block()
         if current is not None:
             self._property_panel.show_block(current)
+
+        # 편집 메뉴 항목(실행취소/다시실행/붙여넣기)의 활성 상태를 실시간으로 맞춘다.
+        # aboutToShow에서만 갱신하면, 메뉴를 한 번도 열지 않은 채 Ctrl+Z 같은
+        # 단축키를 누를 때 액션이 비활성 상태로 굳어 있어 동작하지 않는 문제가
+        # 있었다(비활성 QAction은 단축키로도 trigger되지 않음) — 버그체크 중 발견.
+        self._update_edit_menu_state()
 
     def _update_window_title(self) -> None:
         """창 제목을 "[*]파일명 - EngCalc" 형태로 갱신한다."""

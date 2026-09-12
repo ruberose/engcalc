@@ -597,8 +597,13 @@ class MathBlock(BaseBlock):
         font.setPointSize(INPUT_FONT_SIZE)
         return font
 
-    def _result_line_text(self) -> str | None:
-        """결과 줄에 표시할 문자열. 보여줄 게 없으면 None."""
+    def _formatted_result_value(self) -> str | None:
+        """
+        지금 계산된 값을 표시 단위 설정까지 반영해서 포맷한 순수 문자열("=" 없이).
+
+        결과가 없거나 에러면(EvalResult.value가 None) None. _result_line_text()
+        (화면 결과 줄)와 result_value_text()(클립보드 복사용 공개 API)가 공유한다.
+        """
         if self._result is None or self._result.value is None:
             return None
 
@@ -614,7 +619,13 @@ class MathBlock(BaseBlock):
             except (pint.errors.DimensionalityError, pint.errors.UndefinedUnitError):
                 pass  # 호환되지 않거나 알 수 없는 단위면 조용히 무시하고 원래 값을 보여준다
 
-        formatted = format_value(value, unit_text_override=unit_text_override)
+        return format_value(value, unit_text_override=unit_text_override)
+
+    def _result_line_text(self) -> str | None:
+        """결과 줄에 표시할 문자열. 보여줄 게 없으면 None."""
+        formatted = self._formatted_result_value()
+        if formatted is None:
+            return None
         if _strip_spaces(self._input_text).endswith(_strip_spaces(formatted)):
             # "a = 100" 처럼 입력 자체가 이미 값이면 중복 표시하지 않는다.
             # 공백은 무시하고 비교한다 — format_value()는 숫자와 단위 사이에 항상
@@ -622,6 +633,18 @@ class MathBlock(BaseBlock):
             # 정확히 일치하지 않아서 중복 표시가 새는 버그가 있었다.
             return None
         return f"= {formatted}"
+
+    def result_value_text(self) -> str | None:
+        """
+        지금 계산된 값의 순수 텍스트("=" 없이) — "결과값 복사" 기능이 쓰는 공개 API.
+
+        Note:
+            _result_line_text()는 입력에 이미 값이 있으면("a = 100") 화면에
+            중복 표시를 안 하려고 None을 돌려주지만, 여기서는 그 경우에도
+            "100"을 그대로 돌려준다 — 복사하려는 건 "화면에 보이는 결과 줄"이
+            아니라 "이 블록이 계산한 값 자체"이기 때문이다.
+        """
+        return self._formatted_result_value()
 
     # --- 폭 조절 (드래그) ---
 

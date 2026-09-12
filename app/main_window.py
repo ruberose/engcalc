@@ -259,6 +259,9 @@ class MainWindow(QMainWindow):
         self._duplicate_action.setShortcut(QKeySequence("Ctrl+D"))
         self._duplicate_action.triggered.connect(self._on_duplicate)
 
+        self._copy_result_action = edit_menu.addAction("결과값 복사(&V)")
+        self._copy_result_action.triggered.connect(self._on_copy_result_value)
+
         edit_menu.addSeparator()
 
         align_menu = edit_menu.addMenu("정렬(&L)")
@@ -434,6 +437,26 @@ class MainWindow(QMainWindow):
             return
         self._scene.align_selected_blocks(mode)
 
+    def _on_copy_result_value(self) -> None:
+        """
+        결과값 복사 메뉴 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유).
+
+        선택된 수식 블록(들) 중 계산된 값이 있는 것만(에러/빈 값 제외), 화면
+        위→아래 순서로 값만("=" 없이, 단위 포함) 줄바꿈으로 이어붙여 OS
+        클립보드에 넣는다 — 보고서 등 다른 프로그램에 숫자만 옮겨 붙이고 싶을 때 쓴다.
+        """
+        if self._is_editing_text():
+            return
+        selected = sorted(
+            (item for item in self._scene.selectedItems() if isinstance(item, MathBlock)),
+            key=lambda block: (block.pos().y(), block.pos().x()),
+        )
+        values = [text for block in selected if (text := block.result_value_text()) is not None]
+        if not values:
+            return
+        QApplication.clipboard().setText("\n".join(values))
+        self.statusBar().showMessage(f"결과값 {len(values)}개를 복사했습니다", 2000)
+
     def _on_set_locked(self, locked: bool) -> None:
         """블록 잠그기/잠금 해제 메뉴 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
         if self._is_editing_text():
@@ -453,6 +476,9 @@ class MainWindow(QMainWindow):
         selected_blocks = [item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)]
         selected_block_count = len(selected_blocks)
         self._duplicate_action.setEnabled(selected_block_count >= 1)
+        self._copy_result_action.setEnabled(
+            any(isinstance(b, MathBlock) and b.result_value_text() is not None for b in selected_blocks)
+        )
         # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
         for action in self._align_actions:
             action.setEnabled(selected_block_count >= 2)

@@ -43,16 +43,23 @@ def isolated_qsettings(tmp_path, monkeypatch):
 
 
 class _FakeClipboard:
-    """실제 OS 클립보드 대신 쓰는 가짜 — image()만 흉내 낸다(지금 코드가 그것만 씀)."""
+    """실제 OS 클립보드 대신 쓰는 가짜 — image()/setText()/text()만 흉내 낸다(지금 코드가 그것만 씀)."""
 
     def __init__(self) -> None:
         self._image = QImage()
+        self._text = ""
 
     def image(self) -> QImage:
         return self._image
 
     def set_image(self, image: QImage) -> None:
         self._image = image
+
+    def setText(self, text: str) -> None:  # noqa: N802 (QClipboard의 실제 메서드 이름과 맞춤)
+        self._text = text
+
+    def text(self) -> str:
+        return self._text
 
 
 @pytest.fixture(autouse=True)

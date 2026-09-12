@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -59,6 +60,7 @@ class PropertyPanel(QWidget):
         self._font_size_spin = self._make_font_size_spin()
         self._unit_edit = QLineEdit()
         self._unit_edit.setPlaceholderText("예: MPa (비우면 자동 정리된 단위)")
+        self._decimal_places_spin = self._make_decimal_places_spin()
 
         self._form = QFormLayout()
         self._form.addRow("종류", self._type_label)
@@ -69,6 +71,7 @@ class PropertyPanel(QWidget):
         self._form.addRow("", self._bold_check)
         self._form.addRow("글자 크기", self._font_size_spin)
         self._form.addRow("표시 단위", self._unit_edit)
+        self._form.addRow("표시 자릿수", self._decimal_places_spin)
 
         layout = QVBoxLayout(self)
         layout.addLayout(self._form)
@@ -81,6 +84,7 @@ class PropertyPanel(QWidget):
         self._bold_check.toggled.connect(self._on_bold_changed)
         self._font_size_spin.valueChanged.connect(self._on_font_size_changed)
         self._unit_edit.editingFinished.connect(self._on_unit_changed)
+        self._decimal_places_spin.valueChanged.connect(self._on_decimal_places_changed)
 
         self.show_block(None)
 
@@ -103,6 +107,14 @@ class PropertyPanel(QWidget):
         spin = QDoubleSpinBox()
         spin.setRange(6, 200)
         spin.setDecimals(0)
+        return spin
+
+    @staticmethod
+    def _make_decimal_places_spin() -> QSpinBox:
+        """-1(특수값 "자동")부터 15까지의 정수 스핀박스 — 수식 블록의 결과 표시 자릿수용."""
+        spin = QSpinBox()
+        spin.setRange(-1, 15)
+        spin.setSpecialValueText("자동")
         return spin
 
     # --- 공개 API ---
@@ -128,7 +140,7 @@ class PropertyPanel(QWidget):
 
         if block is None:
             self._type_label.setText("(선택된 블록 없음)")
-            for widget in (self._x_spin, self._y_spin, self._width_spin, self._height_spin, self._bold_check, self._font_size_spin, self._unit_edit):
+            for widget in (self._x_spin, self._y_spin, self._width_spin, self._height_spin, self._bold_check, self._font_size_spin, self._unit_edit, self._decimal_places_spin):
                 self._form.setRowVisible(widget, False)
             return
 
@@ -162,6 +174,10 @@ class PropertyPanel(QWidget):
         self._form.setRowVisible(self._unit_edit, is_math)
         if is_math:
             self._unit_edit.setText(block.preferred_unit())
+
+        self._form.setRowVisible(self._decimal_places_spin, is_math)
+        if is_math:
+            self._decimal_places_spin.setValue(block.decimal_places())
 
     # --- 내부: 화면 -> 블록 ---
 
@@ -218,3 +234,9 @@ class PropertyPanel(QWidget):
         if self._updating or not isinstance(self._block, MathBlock):
             return
         self._apply_with_undo(lambda: self._block.set_preferred_unit(self._unit_edit.text()))
+
+    def _on_decimal_places_changed(self, value: int) -> None:
+        if self._updating or not isinstance(self._block, MathBlock):
+            return
+        places = value if value >= 0 else None
+        self._apply_with_undo(lambda: self._block.set_decimal_places(places))

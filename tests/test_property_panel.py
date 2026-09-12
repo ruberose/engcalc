@@ -121,6 +121,54 @@ def test_editing_unit_updates_math_block_display():
     assert block.preferred_unit() == "kPa"
 
 
+def test_show_math_block_populates_decimal_places_field():
+    """수식 블록에는 표시 자릿수 필드가 보이고, 지정 안 했으면 자동(-1)이어야 한다."""
+    block = MathBlock(position=(0, 0))
+
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    assert panel._form.isRowVisible(panel._decimal_places_spin) is True
+    assert panel._decimal_places_spin.value() == -1
+
+
+def test_text_block_hides_decimal_places_field():
+    block = TextBlock(position=(0, 0))
+
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    assert panel._form.isRowVisible(panel._decimal_places_spin) is False
+
+
+def test_editing_decimal_places_updates_math_block():
+    """자릿수를 바꾸면 수식 블록에도 즉시 반영되어야 한다."""
+    block = MathBlock(position=(0, 0))
+    block.set_input_text("a = 1 / 3")
+    scope = Scope()
+    block.evaluate(scope)
+
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    panel._decimal_places_spin.setValue(2)
+
+    assert block.decimal_places() == 2
+    assert block.result_value_text() == "0.33"
+
+
+def test_setting_decimal_places_back_to_auto_clears_it():
+    block = MathBlock(position=(0, 0))
+    block.set_decimal_places(3)
+
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    panel._decimal_places_spin.setValue(-1)
+
+    assert block.decimal_places() == -1
+
+
 def test_switching_block_type_hides_irrelevant_fields():
     """블록 종류를 바꿔가며 보여주면, 관련 없는 행은 숨겨져야 한다 (form.isRowVisible)."""
     text_block = TextBlock(position=(0, 0))

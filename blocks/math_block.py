@@ -329,6 +329,7 @@ class MathBlock(BaseBlock):
         self._result: EvalResult | None = None
         self._font_size: int = INPUT_FONT_SIZE  # 속성 패널에서 지정한 글자 크기(pt)
         self._preferred_unit: str | None = None  # 속성 패널에서 지정한 결과 표시 단위
+        self._decimal_places: int | None = None  # 속성 패널에서 지정한 소수 자릿수. None이면 자동(_format_number 기본 규칙)
         self._manual_width: float | None = None  # 손잡이로 직접 지정한 폭. None이면 자동(항상 한 줄)
 
         # 각 줄은 (렌더링된 pixmap) 또는 (일반 텍스트로 그릴 문자열) 중 하나만 채워진다.
@@ -407,6 +408,24 @@ class MathBlock(BaseBlock):
     def preferred_unit(self) -> str:
         """현재 지정된 표시 단위. 지정 안 했으면 빈 문자열."""
         return self._preferred_unit or ""
+
+    def set_decimal_places(self, places: int | None) -> None:
+        """
+        결과를 표시할 때 쓸 소수 자릿수를 지정한다 (속성 패널의 "표시 자릿수" 입력용).
+
+        Args:
+            places: 0 이상이면 그 자릿수로 고정 표시(예: 2면 "1.33"). None이면
+                    자동 규칙(정수면 그대로, 아니면 유효숫자 6자리)으로 되돌아간다.
+
+        Note:
+            set_preferred_unit()과 같은 이유로 표시 방식만 바꾸고 재계산은 하지 않는다.
+        """
+        self._decimal_places = places
+        self._recompute_layout()
+
+    def decimal_places(self) -> int:
+        """현재 지정된 표시 자릿수. 지정 안 했으면(자동) -1."""
+        return self._decimal_places if self._decimal_places is not None else -1
 
     def set_manual_width(self, width: float | None) -> None:
         """
@@ -632,7 +651,7 @@ class MathBlock(BaseBlock):
             except (pint.errors.DimensionalityError, pint.errors.UndefinedUnitError):
                 pass  # 호환되지 않거나 알 수 없는 단위면 조용히 무시하고 원래 값을 보여준다
 
-        return format_value(value, unit_text_override=unit_text_override)
+        return format_value(value, unit_text_override=unit_text_override, decimal_places=self._decimal_places)
 
     def _result_line_text(self) -> str | None:
         """결과 줄에 표시할 문자열. 보여줄 게 없으면 None."""
@@ -863,25 +882,28 @@ class MathBlock(BaseBlock):
     # --- 직렬화 ---
 
     def serialize(self) -> dict:
-        """공통 필드(BaseBlock) + 수식 원문 + 글자 크기 + 표시 단위 + (지정했다면) 폭을 담는다."""
+        """공통 필드(BaseBlock) + 수식 원문 + 글자 크기 + 표시 단위/자릿수 + (지정했다면) 폭을 담는다."""
         data = super().serialize()
         data["expression"] = self._input_text
         data["font_size"] = self._font_size
         data["display_unit"] = self._preferred_unit or ""
+        data["decimal_places"] = self._decimal_places if self._decimal_places is not None else -1
         if self._manual_width is not None:
             data["width"] = self._manual_width
         return data
 
     def deserialize(self, data: dict) -> None:
-        """저장된 dict로부터 위치 + 수식 원문 + 글자 크기 + 표시 단위 + 폭을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
+        """저장된 dict로부터 위치 + 수식 원문 + 글자 크기 + 표시 단위/자릿수 + 폭을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
         super().deserialize(data)
         self._font_size = data.get("font_size", INPUT_FONT_SIZE)
         self._preferred_unit = data.get("display_unit") or None
+        stored_places = data.get("decimal_places", -1)
+        self._decimal_places = stored_places if isinstance(stored_places, int) and stored_places >= 0 else None
         self._manual_width = data.get("width")
         self.set_input_text(data.get("expression", ""))
 
 
-def format_value(value, unit_text_override: str | None = None) -> str:
+def format_value(value, unit_text_override: str | None = None, decimal_places: int | None = None) -> str:
     """
     계산 결과를 사람이 읽기 좋은 문자열로 바꾼다.
 
@@ -893,6 +915,8 @@ def format_value(value, unit_text_override: str | None = None) -> str:
             "tonf*m"을 넣어도 "m·tf"로 뒤바뀜), 순서를 지켜야 할 때는
             engine.unit_manager.format_unit_expression()으로 만든 문자열을
             여기 넘긴다 (blocks/math_block.py의 _result_line_text 참고).
+        decimal_places: 지정하면 그 자릿수로 소수점 이하를 고정 표시한다
+            (속성 패널의 "표시 자릿수"). None이면 기존 자동 규칙을 쓴다.
     """
     if isinstance(value, bool):
         return "True" if value else "False"
@@ -900,18 +924,20 @@ def format_value(value, unit_text_override: str | None = None) -> str:
         # 단위가 붙은 값은 float()으로 바로 못 바꾼다(Pint가 일부러 막아둠 —
         # "몇 mm인지" 같은 단위 없는 숫자로의 변환은 의미가 불분명하기 때문).
         # magnitude(숫자)와 units(단위)를 따로 포맷해서 합친다.
-        magnitude_text = _format_number(value.magnitude)
+        magnitude_text = _format_number(value.magnitude, decimal_places=decimal_places)
         unit_text = unit_text_override if unit_text_override is not None else f"{value.units:~P}"
         return f"{magnitude_text} {unit_text}".strip()
-    return _format_number(value)
+    return _format_number(value, decimal_places=decimal_places)
 
 
-def _format_number(value) -> str:
+def _format_number(value, decimal_places: int | None = None) -> str:
     """단위 없는 순수 숫자를 사람이 읽기 좋은 문자열로 바꾼다."""
     try:
         as_float = float(value)
     except (TypeError, ValueError):
         return str(value)
+    if decimal_places is not None:
+        return f"{as_float:.{decimal_places}f}"
     if as_float == int(as_float):
         return str(int(as_float))
     return f"{as_float:.6g}"

@@ -33,6 +33,11 @@ _PASTE_OFFSET = 20.0
 #: align_selected_blocks()가 받는 유효한 정렬 기준 값.
 _ALIGN_MODES = frozenset({"left", "right", "top", "bottom", "center_h", "center_v"})
 
+#: adjust_font_size_for_selected()가 글자 크기를 조정할 수 있는 범위(ui/property_panel.py의
+#: 글자 크기 스핀박스 범위와 맞춤).
+_MIN_FONT_SIZE = 6
+_MAX_FONT_SIZE = 200
+
 #: "용지 기반" 문서 형식에서 고를 수 있는 용지 크기(mm). 나중에 다른 용지를
 #: 추가할 땐 이 딕셔너리에 항목만 더하면 된다(다른 코드는 안 바꿔도 됨).
 PAPER_SIZES_MM: dict[str, tuple[float, float]] = {"A4": (210.0, 297.0)}
@@ -570,6 +575,91 @@ class DocumentScene(QGraphicsScene):
 
         self.commit_undo_snapshot(before)
         self.recalculate_all()
+
+    def distribute_selected_blocks(self, mode: str) -> None:
+        """
+        선택된 블록 3개 이상을 가로/세로로 균등한 간격으로 펼친다.
+
+        Args:
+            mode: "horizontal"(가로 간격 균등) 또는 "vertical"(세로 간격 균등).
+                그 외 값이거나 선택된 블록이 3개 미만이면 아무 것도 하지 않는다
+                (2개로는 "간격"이라는 개념 자체가 성립하지 않음 — 양 끝만 있으면
+                가운데에 분배할 블록이 없다).
+
+        Note:
+            양 끝(가장 왼쪽/오른쪽, 또는 가장 위/아래) 블록은 제자리에 두고,
+            그 사이 블록들만 위치 순서를 유지한 채 간격이 똑같아지도록
+            다시 배치한다 — 정렬(align_selected_blocks)과 같은 이유로 순서가
+            바뀔 수 있어 끝나면 재계산한다.
+        """
+        if mode not in ("horizontal", "vertical"):
+            return
+        blocks = [item for item in self.selectedItems() if isinstance(item, BaseBlock) and not item.is_locked()]
+        if len(blocks) < 3:
+            return
+
+        geometry = {block: (block.pos(), block.boundingRect()) for block in blocks}
+        before = self.capture_undo_snapshot()
+
+        if mode == "horizontal":
+            ordered = sorted(blocks, key=lambda b: geometry[b][0].x())
+            first_pos, _first_rect = geometry[ordered[0]]
+            last_pos, last_rect = geometry[ordered[-1]]
+            span = (last_pos.x() + last_rect.width()) - first_pos.x()
+            total_width = sum(geometry[b][1].width() for b in ordered)
+            gap = (span - total_width) / (len(ordered) - 1)
+            cursor = first_pos.x()
+            for block in ordered:
+                pos, rect = geometry[block]
+                block.setPos(cursor, pos.y())
+                cursor += rect.width() + gap
+        else:
+            ordered = sorted(blocks, key=lambda b: geometry[b][0].y())
+            first_pos, _first_rect = geometry[ordered[0]]
+            last_pos, last_rect = geometry[ordered[-1]]
+            span = (last_pos.y() + last_rect.height()) - first_pos.y()
+            total_height = sum(geometry[b][1].height() for b in ordered)
+            gap = (span - total_height) / (len(ordered) - 1)
+            cursor = first_pos.y()
+            for block in ordered:
+                pos, rect = geometry[block]
+                block.setPos(pos.x(), cursor)
+                cursor += rect.height() + gap
+
+        self.commit_undo_snapshot(before)
+        self.recalculate_all()
+
+    def adjust_font_size_for_selected(self, delta: int) -> int:
+        """
+        선택된 텍스트/수식 블록들의 글자 크기를 한 번에 delta만큼 바꾼다.
+
+        Args:
+            delta: 양수면 키우고, 음수면 줄인다. 결과는 항상
+                [_MIN_FONT_SIZE, _MAX_FONT_SIZE] 범위로 잘린다(개별 블록이
+                이미 그 범위 끝에 있으면 그 블록만 변화가 없을 수 있다).
+
+        Returns:
+            글자 크기가 적용된(잠기지 않은 텍스트/수식) 블록의 개수. 0이면
+            호출부가 굳이 실행취소 스냅샷을 남기거나 화면을 갱신할 필요가 없다.
+
+        Note:
+            글자 크기는 표시 전용이라 재계산은 필요 없다(align_selected_blocks와
+            달리 화면상 순서에 영향을 주지 않음).
+        """
+        blocks = [
+            item
+            for item in self.selectedItems()
+            if isinstance(item, (TextBlock, MathBlock)) and not item.is_locked()
+        ]
+        if not blocks:
+            return 0
+
+        before = self.capture_undo_snapshot()
+        for block in blocks:
+            new_size = max(_MIN_FONT_SIZE, min(_MAX_FONT_SIZE, block.font_size() + delta))
+            block.set_font_size(new_size)
+        self.commit_undo_snapshot(before)
+        return len(blocks)
 
     def recalculate_all(self) -> None:
         """

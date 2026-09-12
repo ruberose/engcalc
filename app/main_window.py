@@ -28,6 +28,7 @@ from app.settings import set_grid_visible as save_grid_visible_setting
 from blocks.base_block import BaseBlock
 from blocks.image_block import SUPPORTED_EXTENSIONS
 from blocks.math_block import MathBlock
+from blocks.text_block import TextBlock
 from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
@@ -284,6 +285,26 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, m=mode: self._on_align(m))
             self._align_actions.append(action)
 
+        align_menu.addSeparator()
+        self._distribute_actions: list[QAction] = []
+        for label, mode in (
+            ("가로 간격 균등", "horizontal"),
+            ("세로 간격 균등", "vertical"),
+        ):
+            action = align_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, m=mode: self._on_distribute(m))
+            self._distribute_actions.append(action)
+
+        edit_menu.addSeparator()
+
+        self._increase_font_action = edit_menu.addAction("글자 크게(&+)")
+        self._increase_font_action.setShortcut(QKeySequence("Ctrl+]"))
+        self._increase_font_action.triggered.connect(lambda: self._on_adjust_font_size(2))
+
+        self._decrease_font_action = edit_menu.addAction("글자 작게(&-)")
+        self._decrease_font_action.setShortcut(QKeySequence("Ctrl+["))
+        self._decrease_font_action.triggered.connect(lambda: self._on_adjust_font_size(-2))
+
         edit_menu.addSeparator()
 
         self._lock_action = edit_menu.addAction("블록 잠그기(&K)")
@@ -447,6 +468,22 @@ class MainWindow(QMainWindow):
             return
         self._scene.align_selected_blocks(mode)
 
+    def _on_distribute(self, mode: str) -> None:
+        """"가로/세로 간격 균등" 메뉴 항목 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        self._scene.distribute_selected_blocks(mode)
+
+    def _on_adjust_font_size(self, delta: int) -> None:
+        """"글자 크게/작게" 메뉴/단축키 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        changed = self._scene.adjust_font_size_for_selected(delta)
+        if changed:
+            current = self._property_panel.current_block()
+            if current is not None:
+                self._property_panel.show_block(current)
+
     def _on_copy_result_value(self) -> None:
         """
         결과값 복사 메뉴 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유).
@@ -492,6 +529,12 @@ class MainWindow(QMainWindow):
         # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
         for action in self._align_actions:
             action.setEnabled(selected_block_count >= 2)
+        # 간격 균등은 "사이"에 놓일 블록이 최소 1개는 있어야 하므로 3개 이상 필요하다.
+        for action in self._distribute_actions:
+            action.setEnabled(selected_block_count >= 3)
+        can_adjust_font = any(isinstance(b, (TextBlock, MathBlock)) and not b.is_locked() for b in selected_blocks)
+        self._increase_font_action.setEnabled(can_adjust_font)
+        self._decrease_font_action.setEnabled(can_adjust_font)
         self._lock_action.setEnabled(any(not b.is_locked() for b in selected_blocks))
         self._unlock_action.setEnabled(any(b.is_locked() for b in selected_blocks))
 

@@ -152,6 +152,10 @@ class DocumentScene(QGraphicsScene):
         self._grid_visible = visible
         self.update()
 
+    def is_grid_visible(self) -> bool:
+        """격자 배경이 지금 켜져 있는지. 내보내기 전후로 사용자의 원래 설정을 복원할 때 쓴다."""
+        return self._grid_visible
+
     # --- 문서 형식 (자유 캔버스 / 용지 기반) ---
 
     def set_document_format(self, document_format: str, paper_size: str = "A4") -> None:

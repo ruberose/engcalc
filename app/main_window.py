@@ -17,7 +17,14 @@ from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPageLayout, QPage
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import QApplication, QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMessageBox
 
-from app.settings import add_recent_file, autosave_file_path, clear_recent_files, get_recent_files
+from app.settings import (
+    add_recent_file,
+    autosave_file_path,
+    clear_recent_files,
+    get_recent_files,
+)
+from app.settings import get_grid_visible as get_saved_grid_visible
+from app.settings import set_grid_visible as save_grid_visible_setting
 from blocks.base_block import BaseBlock
 from blocks.image_block import SUPPORTED_EXTENSIONS
 from blocks.math_block import MathBlock
@@ -135,6 +142,7 @@ class MainWindow(QMainWindow):
             self._scene / self._view에 저장해서 창이 살아있는 동안 계속 살아있게 한다.
         """
         self._scene = DocumentScene()
+        self._scene.set_grid_visible(get_saved_grid_visible())
         self._view = DocumentView(self._scene, self)
         self.setCentralWidget(self._view)
 
@@ -294,10 +302,23 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._property_dock.toggleViewAction())
         view_menu.addAction(self._variable_dock.toggleViewAction())
 
+        view_menu.addSeparator()
+        self._grid_visible_action = view_menu.addAction("격자 보기(&G)")
+        self._grid_visible_action.setCheckable(True)
+        self._grid_visible_action.setChecked(self._scene.is_grid_visible())
+        self._grid_visible_action.toggled.connect(self._on_toggle_grid_visible)
+
         help_menu = menu_bar.addMenu("도움말(&H)")
         help_action = help_menu.addAction("EngCalc 사용법(&U)...")
         help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
         help_action.triggered.connect(self._on_show_help)
+
+    # --- 보기: 격자 ---
+
+    def _on_toggle_grid_visible(self, visible: bool) -> None:
+        """"격자 보기" 메뉴 체크박스를 누르면 격자를 켜고 끄고, 다음에 켜도 유지되게 저장한다."""
+        self._scene.set_grid_visible(visible)
+        save_grid_visible_setting(visible)
 
     # --- 편집: 실행취소 / 다시실행 / 복사 / 붙여넣기 ---
 
@@ -827,6 +848,7 @@ class MainWindow(QMainWindow):
             file_path += ".pdf"
 
         self._scene.clearSelection()
+        was_grid_visible = self._scene.is_grid_visible()
         self._scene.set_grid_visible(False)
         try:
             exported = export_to_pdf(
@@ -840,7 +862,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "PDF 내보내기 실패", f"PDF를 저장할 수 없습니다:\n{file_path}\n\n{exc}")
             return
         finally:
-            self._scene.set_grid_visible(True)
+            self._scene.set_grid_visible(was_grid_visible)
 
         if exported:
             self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
@@ -868,6 +890,7 @@ class MainWindow(QMainWindow):
             file_path += ".png"
 
         self._scene.clearSelection()
+        was_grid_visible = self._scene.is_grid_visible()
         self._scene.set_grid_visible(False)
         try:
             exported = export_to_png(self._scene, file_path)
@@ -875,7 +898,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "PNG 내보내기 실패", f"이미지를 저장할 수 없습니다:\n{file_path}\n\n{exc}")
             return
         finally:
-            self._scene.set_grid_visible(True)
+            self._scene.set_grid_visible(was_grid_visible)
 
         if exported:
             self.statusBar().showMessage(f"PNG로 내보냈습니다: {file_path}", 3000)
@@ -914,6 +937,7 @@ class MainWindow(QMainWindow):
             return
 
         self._scene.clearSelection()
+        was_grid_visible = self._scene.is_grid_visible()
         self._scene.set_grid_visible(False)
         try:
             print_scene(
@@ -924,7 +948,7 @@ class MainWindow(QMainWindow):
                 show_header_footer=self._show_header_footer,
             )
         finally:
-            self._scene.set_grid_visible(True)
+            self._scene.set_grid_visible(was_grid_visible)
 
         self.statusBar().showMessage("인쇄를 보냈습니다", 3000)
 

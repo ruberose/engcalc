@@ -16,6 +16,7 @@ MAX_RECENT_FILES = 10
 _ORGANIZATION = "EngCalc"
 _APPLICATION = "EngCalc"
 _RECENT_FILES_KEY = "recent_files"
+_GRID_VISIBLE_KEY = "grid_visible"
 
 #: 자동 저장 파일을 둘 폴더/이름. 사용자가 실제로 저장하는 .engcalc 파일과는
 #: 별개의, 이 프로그램 전용 임시 저장소다.
@@ -48,6 +49,16 @@ def add_recent_file(file_path: str) -> None:
 def clear_recent_files() -> None:
     """최근 파일 목록을 비운다."""
     _settings().setValue(_RECENT_FILES_KEY, [])
+
+
+def get_grid_visible() -> bool:
+    """배경 격자를 보여줄지 (메뉴 > 보기 > 격자 보기). 앱을 껐다 켜도 유지되는 전역 설정이다."""
+    return bool(_settings().value(_GRID_VISIBLE_KEY, True, type=bool))
+
+
+def set_grid_visible(visible: bool) -> None:
+    """배경 격자 표시 여부를 저장한다."""
+    _settings().setValue(_GRID_VISIBLE_KEY, visible)
 
 
 def autosave_file_path() -> str:

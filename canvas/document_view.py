@@ -1,14 +1,22 @@
 """
 문서 캔버스를 화면에 보여주는 뷰 — QGraphicsView 서브클래스.
 
-마우스 휠 확대/축소, Space+드래그로 캔버스 스크롤(패닝), Delete 키로
-선택된 블록 삭제, 이미지 파일 드래그앤드롭 삽입을 담당한다. "그리기" 자체는
-DocumentScene의 몫이고, 이 클래스는 사용자 입력을 어떻게 캔버스 조작으로
-바꿀지만 다룬다.
+마우스 휠(기본) 스크롤 / Ctrl+휠 확대·축소, 휠 버튼(가운데 버튼) 드래그 또는
+Space+드래그로 캔버스 패닝, Delete 키로 선택된 블록 삭제, 이미지 파일
+드래그앤드롭 삽입을 담당한다. "그리기" 자체는 DocumentScene의 몫이고, 이
+클래스는 사용자 입력을 어떻게 캔버스 조작으로 바꿀지만 다룬다.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QKeyEvent, QPainter, QWheelEvent
+from PySide6.QtGui import (
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsTextItem, QGraphicsView
 
 from blocks.image_block import SUPPORTED_EXTENSIONS
@@ -39,6 +47,12 @@ class DocumentView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._current_scale: float = 1.0
+
+        # 휠 버튼(가운데 버튼)을 누른 채 드래그하면 그 이동량만큼 스크롤바를
+        # 직접 옮겨서 패닝한다(Qt의 ScrollHandDrag는 왼쪽 버튼 전용이라, 이건
+        # 별도로 마우스 이벤트를 가로채 구현한다).
+        self._panning: bool = False
+        self._pan_last_pos = None
 
         self.setAcceptDrops(True)
 
@@ -90,7 +104,11 @@ class DocumentView(QGraphicsView):
         )
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
-        """마우스 휠로 커서 위치를 중심으로 확대/축소한다."""
+        """Ctrl+휠: 커서 위치를 중심으로 확대/축소. 휠만 굴리면 기본 동작(위아래 스크롤)."""
+        if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            super().wheelEvent(event)
+            return
+
         factor = ZOOM_IN_FACTOR if event.angleDelta().y() > 0 else ZOOM_OUT_FACTOR
         new_scale = self._current_scale * factor
 
@@ -99,6 +117,39 @@ class DocumentView(QGraphicsView):
 
         self._current_scale = new_scale
         self.scale(factor, factor)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """휠 버튼(가운데 버튼)을 누르면 패닝을 시작한다."""
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._panning = True
+            self._pan_last_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """패닝 중이면 마우스가 움직인 만큼 스크롤바를 직접 옮긴다."""
+        if self._panning and self._pan_last_pos is not None:
+            delta = event.position() - self._pan_last_pos
+            self._pan_last_pos = event.position()
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            h_bar.setValue(h_bar.value() - round(delta.x()))
+            v_bar.setValue(v_bar.value() - round(delta.y()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """휠 버튼에서 손을 떼면 패닝을 끝낸다."""
+        if event.button() == Qt.MouseButton.MiddleButton and self._panning:
+            self._panning = False
+            self._pan_last_pos = None
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """

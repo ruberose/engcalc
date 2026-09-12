@@ -138,8 +138,16 @@ def test_export_does_not_enlarge_content_narrower_than_page():
     assert abs(target.width() - source.width()) < 1e-6
 
 
-def test_export_still_shrinks_content_wider_than_page():
-    """내용이 본문 폭보다 넓으면 지금까지처럼 페이지에 맞게 줄어들어야 한다."""
+def test_export_clips_content_wider_than_page_instead_of_shrinking():
+    """
+    내용이 본문 폭보다 넓으면 줄이지 않고 그냥 잘린다(다음 페이지로 넘기지 않음).
+
+    사용자 피드백: "실제 출력물과 똑같이 프로그램에서 써져야 되지 않겠어?" —
+    콘텐츠 폭에 맞춰 배율을 조정하던 예전 방식은, 문서 전체 콘텐츠 폭에
+    따라 글자 크기가 매번 달라져서 화면과 다르게(예측 불가능하게) 찍혔다.
+    이제는 항상 1:1로 찍고, 폭 초과분은 그냥 잘려서 두 번째 "폭 페이지"가
+    생기지 않는다 — target/source 크기가 항상 똑같아야(스케일 없음) 한다.
+    """
     scene = DocumentScene()
     wide_block = TextBlock(position=(0, 0))
     wide_block.set_text("아주 긴 텍스트 " * 40)  # 페이지 폭보다 훨씬 넓게
@@ -160,7 +168,8 @@ def test_export_still_shrinks_content_wider_than_page():
 
     assert captured
     target, source = captured[0]
-    assert target.width() < source.width()
+    assert abs(target.width() - source.width()) < 1e-6  # 스케일 없음(1:1)
+    assert source.width() < scene.itemsBoundingRect().width()  # 폭 초과분은 잘림
 
 
 def test_header_footer_off_by_default():

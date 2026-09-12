@@ -327,6 +327,7 @@ class MathBlock(BaseBlock):
 
         self._input_text: str = ""
         self._result: EvalResult | None = None
+        self._font_size: int = INPUT_FONT_SIZE  # 속성 패널에서 지정한 글자 크기(pt)
         self._preferred_unit: str | None = None  # 속성 패널에서 지정한 결과 표시 단위
         self._manual_width: float | None = None  # 손잡이로 직접 지정한 폭. None이면 자동(항상 한 줄)
 
@@ -367,8 +368,18 @@ class MathBlock(BaseBlock):
             모든 MathBlock을 순서대로 evaluate()해야 한다 (계획서 5.1 계산 순서 규칙).
         """
         self._input_text = strip_trailing_calculator_equals(text)
-        self._input_pixmap, self._input_fallback = _render_line(self._input_text)
+        self._input_pixmap, self._input_fallback = _render_line(self._input_text, self._font_size)
         self._recompute_layout()
+
+    def set_font_size(self, size: int) -> None:
+        """글자 크기(pt)를 바꾸고 입력/결과/합친 줄을 전부 새 크기로 다시 그린다."""
+        self._font_size = size
+        self._input_pixmap, self._input_fallback = _render_line(self._input_text, self._font_size)
+        self._recompute_layout()  # 결과/합친 줄도 새 크기로 다시 그리고, geometry 갱신도 처리함
+
+    def font_size(self) -> int:
+        """현재 글자 크기(pt)를 반환한다."""
+        return self._font_size
 
     def input_text(self) -> str:
         """현재 입력된 수식 원문을 반환한다."""
@@ -445,12 +456,14 @@ class MathBlock(BaseBlock):
             self._result_pixmap, self._result_fallback = None, None
         else:
             line = self._result_line_text()
-            self._result_pixmap, self._result_fallback = _render_line(line) if line else (None, None)
+            self._result_pixmap, self._result_fallback = (
+                _render_line(line, self._font_size) if line else (None, None)
+            )
 
         combined = self._combined_line_text()
         combined_color = _ERROR_COLOR_HEX if is_error else "black"
         self._combined_pixmap, self._combined_fallback = (
-            _render_line(combined, color=combined_color) if combined else (None, None)
+            _render_line(combined, self._font_size, color=combined_color) if combined else (None, None)
         )
 
         self.prepareGeometryChange()
@@ -594,7 +607,7 @@ class MathBlock(BaseBlock):
     def _plain_font(self) -> QFont:
         """시스템 기본 UI 폰트 — 한글도 깨지지 않고 표시된다."""
         font = QFont()
-        font.setPointSize(INPUT_FONT_SIZE)
+        font.setPointSize(self._font_size)
         return font
 
     def _formatted_result_value(self) -> str | None:
@@ -850,17 +863,19 @@ class MathBlock(BaseBlock):
     # --- 직렬화 ---
 
     def serialize(self) -> dict:
-        """공통 필드(BaseBlock) + 수식 원문 + 표시 단위 + (지정했다면) 폭을 담는다."""
+        """공통 필드(BaseBlock) + 수식 원문 + 글자 크기 + 표시 단위 + (지정했다면) 폭을 담는다."""
         data = super().serialize()
         data["expression"] = self._input_text
+        data["font_size"] = self._font_size
         data["display_unit"] = self._preferred_unit or ""
         if self._manual_width is not None:
             data["width"] = self._manual_width
         return data
 
     def deserialize(self, data: dict) -> None:
-        """저장된 dict로부터 위치 + 수식 원문 + 표시 단위 + 폭을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
+        """저장된 dict로부터 위치 + 수식 원문 + 글자 크기 + 표시 단위 + 폭을 복원한다 (계산은 별도 recalculate_all()이 담당)."""
         super().deserialize(data)
+        self._font_size = data.get("font_size", INPUT_FONT_SIZE)
         self._preferred_unit = data.get("display_unit") or None
         self._manual_width = data.get("width")
         self.set_input_text(data.get("expression", ""))

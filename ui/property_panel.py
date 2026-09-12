@@ -147,13 +147,18 @@ class PropertyPanel(QWidget):
             self._height_spin.setValue(rect.height())
 
         is_text = isinstance(block, TextBlock)
+        is_math = isinstance(block, MathBlock)
+
+        # 굵게는 텍스트 블록만 지원한다(수식은 mathtext 렌더링이라 별도 지원 없음).
         self._form.setRowVisible(self._bold_check, is_text)
-        self._form.setRowVisible(self._font_size_spin, is_text)
         if is_text:
             self._bold_check.setChecked(block.is_bold())
+
+        # 글자 크기는 텍스트/수식 블록 둘 다 지원한다.
+        self._form.setRowVisible(self._font_size_spin, is_text or is_math)
+        if is_text or is_math:
             self._font_size_spin.setValue(block.font_size())
 
-        is_math = isinstance(block, MathBlock)
         self._form.setRowVisible(self._unit_edit, is_math)
         if is_math:
             self._unit_edit.setText(block.preferred_unit())
@@ -205,7 +210,7 @@ class PropertyPanel(QWidget):
         self._apply_with_undo(lambda: self._block.set_bold(checked))
 
     def _on_font_size_changed(self, _value: float) -> None:
-        if self._updating or not isinstance(self._block, TextBlock):
+        if self._updating or not isinstance(self._block, (TextBlock, MathBlock)):
             return
         self._apply_with_undo(lambda: self._block.set_font_size(int(self._font_size_spin.value())))
 

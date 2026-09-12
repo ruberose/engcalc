@@ -137,26 +137,28 @@ def _render_scene_to_paged_device(
     body_height = page_rect.height() - header_h - footer_h
     body_width = page_rect.width()
 
-    # 씬 콘텐츠가 본문 폭보다 넓을 때만 줄인다 — 화면보다 작은 내용을 억지로
-    # 페이지 폭에 맞춰 키우면(예: 한 줄짜리 짧은 블록) 글자가 비정상적으로
-    # 커 보인다("비율이 이상해 보인다"는 사용자 피드백의 원인이었다).
-    scale = min(1.0, body_width / content_rect.width()) if content_rect.width() > 0 else 1.0
-    # 한 페이지의 본문 영역에 들어가는 만큼을, 씬 좌표 기준 높이로 환산.
-    band_height_scene = body_height / scale if scale > 0 else content_rect.height()
-    page_count = max(1, math.ceil(content_rect.height() / band_height_scene))
+    # 항상 화면에 보이는 그대로(1:1, 확대도 축소도 없이) 찍는다 — "실제
+    # 출력물이 프로그램 화면과 똑같아야 한다"는 요청 때문에, 콘텐츠 폭에
+    # 맞춰 배율을 조정하던 예전 방식(넓으면 줄이고harmless, 좁으면 그대로)을
+    # 버렸다. 그 방식은 문서 전체 콘텐츠 폭에 따라 글자 크기가 매번 달라져서
+    # 예측하기 어려웠다(내용이 넓게 퍼져 있으면 글자가 뜻밖에 작아짐).
+    # 내용이 본문 폭보다 넓으면 초과분은 다음 페이지로 넘기지 않고 그냥
+    # 잘린다(가로 방향 페이지 나누기는 지원하지 않음 — 세로로 긴 계산서
+    # 문서에 맞춘 동작이다).
+    page_count = max(1, math.ceil(content_rect.height() / body_height)) if body_height > 0 else 1
 
     display_title = title or "EngCalc 문서"
     for page_index in range(page_count):
         if page_index > 0:
             writer.newPage()
 
-        band_top = content_rect.top() + page_index * band_height_scene
-        band_height = min(band_height_scene, content_rect.bottom() - band_top)
-        source_rect = QRectF(content_rect.left(), band_top, content_rect.width(), band_height)
-        # target_rect도 source와 같은 배율(scale)로 맞춰야 한다 — 폭을 항상
-        # body_width로 고정해버리면, source/target 종횡비가 달라져서
-        # KeepAspectRatio가 다시 확대해버리는(스케일 캡을 무력화하는) 결과가 된다.
-        target_rect = QRectF(0, body_top, content_rect.width() * scale, band_height * scale)
+        band_top = content_rect.top() + page_index * body_height
+        band_height = min(body_height, content_rect.bottom() - band_top)
+        band_width = min(content_rect.width(), body_width)
+        source_rect = QRectF(content_rect.left(), band_top, band_width, band_height)
+        # target_rect를 source_rect와 정확히 같은 크기로 맞춰서 KeepAspectRatio가
+        # 아무 확대/축소도 하지 않게 한다(그래야 화면과 정확히 같은 크기로 찍힘).
+        target_rect = QRectF(0, body_top, band_width, band_height)
 
         scene.render(painter, target_rect, source_rect, Qt.AspectRatioMode.KeepAspectRatio)
         if show_header_footer:

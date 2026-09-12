@@ -79,6 +79,31 @@ def test_editing_size_resizes_image_block():
     assert block.boundingRect().height() == 150
 
 
+def test_show_math_block_populates_font_size_field():
+    """수식 블록도 텍스트 블록처럼 글자 크기 필드가 채워져야 한다(굵게는 지원 안 함)."""
+    block = MathBlock(position=(0, 0))
+    block.set_font_size(22)
+
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    assert panel._form.isRowVisible(panel._font_size_spin) is True
+    assert panel._font_size_spin.value() == 22
+    assert panel._form.isRowVisible(panel._bold_check) is False
+
+
+def test_editing_font_size_updates_math_block():
+    """글자크기를 바꾸면 수식 블록에도 즉시 반영되어야 한다."""
+    block = MathBlock(position=(0, 0))
+    block.set_input_text("a = 1")
+    panel = PropertyPanel()
+    panel.show_block(block)
+
+    panel._font_size_spin.setValue(28)
+
+    assert block.font_size() == 28
+
+
 def test_editing_unit_updates_math_block_display():
     """수식 블록의 표시 단위를 바꾸면 결과가 그 단위로 다시 표시되어야 한다."""
     block = MathBlock(position=(0, 0))

@@ -229,6 +229,10 @@ class MainWindow(QMainWindow):
         self._paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         self._paste_action.triggered.connect(self._on_paste)
 
+        self._duplicate_action = edit_menu.addAction("복제(&D)")
+        self._duplicate_action.setShortcut(QKeySequence("Ctrl+D"))
+        self._duplicate_action.triggered.connect(self._on_duplicate)
+
         edit_menu.addSeparator()
 
         align_menu = edit_menu.addMenu("정렬(&L)")
@@ -332,6 +336,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{len(pasted)}개 블록을 붙여넣었습니다", 2000)
         self._update_edit_menu_state()
 
+    def _on_duplicate(self) -> None:
+        """복제 메뉴/단축키(Ctrl+D) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        duplicated = self._scene.duplicate_selected_blocks()
+        if duplicated:
+            self.statusBar().showMessage(f"{len(duplicated)}개 블록을 복제했습니다", 2000)
+        self._update_edit_menu_state()
+
     def _on_align(self, mode: str) -> None:
         """정렬 메뉴 항목 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
         if self._is_editing_text():
@@ -344,8 +357,9 @@ class MainWindow(QMainWindow):
         self._redo_action.setEnabled(self._scene.can_redo())
         self._copy_action.setEnabled(bool(self._scene.selectedItems()))
         self._paste_action.setEnabled(self._scene.can_paste())
-        # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
         selected_block_count = len([item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)])
+        self._duplicate_action.setEnabled(selected_block_count >= 1)
+        # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
         for action in self._align_actions:
             action.setEnabled(selected_block_count >= 2)
 

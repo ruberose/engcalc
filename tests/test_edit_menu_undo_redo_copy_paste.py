@@ -162,3 +162,39 @@ def test_copy_paste_via_actions_duplicates_block(window):
     _app.processEvents()
 
     assert len(_math_blocks(window)) == 2
+
+
+def test_duplicate_action_uses_ctrl_d_shortcut(window):
+    """복제 메뉴 항목은 Ctrl+D 단축키를 써야 한다."""
+    assert window._duplicate_action.shortcut() == QKeySequence("Ctrl+D")
+
+
+def test_duplicate_action_disabled_with_nothing_selected(window):
+    _add_math_block_via_ui(window, 150, 100, "a = 1")
+    window._scene.clearSelection()
+    window._update_edit_menu_state()
+    assert not window._duplicate_action.isEnabled()
+
+
+def test_ctrl_d_keypress_duplicates_selected_block(window):
+    """실제 Ctrl+D 키 입력만으로 선택된 블록이 하나 더 생겨야 한다."""
+    block = _add_math_block_via_ui(window, 150, 100, "F = 200 kN")
+    block.setSelected(True)
+    _app.processEvents()
+
+    QTest.keyClick(window, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    _app.processEvents()
+
+    assert len(_math_blocks(window)) == 2
+
+
+def test_duplicate_ignored_while_editing_text(window):
+    """실제로 텍스트 편집 중일 때는 Ctrl+D가 문서 복제로 넘어가면 안 된다."""
+    block = _add_math_block_via_ui(window, 150, 100, "a = 1")
+    block.start_editing()
+    _app.processEvents()
+
+    window._on_duplicate()  # 편집 중이므로 무시되어야 함
+    assert len(_math_blocks(window)) == 1
+
+    block.finish_editing()

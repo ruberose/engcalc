@@ -395,7 +395,7 @@ class DocumentScene(QGraphicsScene):
         self.clearSelection()
         self.load_blocks_list(following)
 
-    # --- 복사 / 붙여넣기 ---
+    # --- 복사 / 붙여넣기 / 복제 ---
 
     def copy_selected_blocks(self) -> None:
         """선택된 블록들을 이 씬 안에서만 쓰는 내부 클립보드에 담는다."""
@@ -410,17 +410,56 @@ class DocumentScene(QGraphicsScene):
         클립보드에 담긴 블록들을 원본에서 약간 어긋난 위치에 새로 만들어 추가한다.
 
         Note:
-            새 블록은 각자 새로운 id를 받는다(생성자에 block_id를 넘기지 않으므로
-            자동 생성됨) — 원본과 id가 겹치면 안 되기 때문이다. 붙여넣은 블록들만
-            선택 상태로 남겨서, 바로 이어서 옮기거나 삭제하기 편하게 한다.
+            붙여넣은 블록들만 선택 상태로 남겨서, 바로 이어서 옮기거나 지우기
+            편하게 한다. 실제 복제 작업은 duplicate_selected_blocks()와
+            _clone_blocks_from_data()를 공유한다 — 소스가 클립보드냐 지금
+            선택된 블록이냐만 다르다.
         """
         if not self._clipboard:
             return []
 
         before = self.capture_undo_snapshot()
         self.clearSelection()
-        pasted: list[BaseBlock] = []
-        for block_data in self._clipboard:
+        pasted = self._clone_blocks_from_data(self._clipboard)
+
+        if pasted:
+            self.commit_undo_snapshot(before)
+            self.recalculate_all()
+        return pasted
+
+    def duplicate_selected_blocks(self) -> list[BaseBlock]:
+        """
+        지금 선택된 블록(들)을 원본에서 약간 어긋난 위치에 바로 복제한다(Ctrl+D).
+
+        Note:
+            복사(Ctrl+C) + 붙여넣기(Ctrl+V)와 결과는 같지만 클립보드를 거치지
+            않는다 — 이전에 복사해둔 내용이 있다면 복제 후에도 그대로
+            붙여넣을 수 있어야 하기 때문이다(클립보드를 건드리면 안 됨).
+        """
+        selected_data = [item.serialize() for item in self.selectedItems() if isinstance(item, BaseBlock)]
+        if not selected_data:
+            return []
+
+        before = self.capture_undo_snapshot()
+        self.clearSelection()
+        duplicated = self._clone_blocks_from_data(selected_data)
+
+        if duplicated:
+            self.commit_undo_snapshot(before)
+            self.recalculate_all()
+        return duplicated
+
+    def _clone_blocks_from_data(self, blocks_data: list[dict]) -> list[BaseBlock]:
+        """
+        block dict 목록으로부터 새 블록들을 만들어 원본에서 살짝 어긋난 위치에
+        추가하고 선택 상태로 만든다. paste_blocks()/duplicate_selected_blocks() 공용.
+
+        Note:
+            새 블록은 각자 새로운 id를 받는다(생성자에 block_id를 넘기지 않으므로
+            자동 생성됨) — 원본과 id가 겹치면 안 되기 때문이다.
+        """
+        cloned: list[BaseBlock] = []
+        for block_data in blocks_data:
             block_class = _BLOCK_CLASSES.get(block_data.get("type"))
             if block_class is None:
                 continue
@@ -432,12 +471,8 @@ class DocumentScene(QGraphicsScene):
             block.setPos(block.pos().x() + _PASTE_OFFSET, block.pos().y() + _PASTE_OFFSET)
             self.addItem(block)
             block.setSelected(True)
-            pasted.append(block)
-
-        if pasted:
-            self.commit_undo_snapshot(before)
-            self.recalculate_all()
-        return pasted
+            cloned.append(block)
+        return cloned
 
     # --- 정렬 ---
 

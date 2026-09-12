@@ -279,3 +279,98 @@ def test_copy_selected_blocks_with_nothing_selected_clears_clipboard():
     scene.clearSelection()
     scene.copy_selected_blocks()
     assert not scene.can_paste()
+
+
+# --- 복제 (Ctrl+D) ---
+
+
+def test_duplicate_with_nothing_selected_does_nothing():
+    """선택된 블록이 없으면 빈 리스트를 돌려주고 아무 일도 없어야 한다."""
+    scene = DocumentScene()
+    block = MathBlock(position=(0, 0))
+    scene.addItem(block)
+
+    assert scene.duplicate_selected_blocks() == []
+    assert len(_math_blocks(scene)) == 1
+
+
+def test_duplicate_creates_copy_with_offset_and_new_id():
+    """복제하면 내용은 같고 위치는 어긋난, id가 다른 새 블록이 바로 생겨야 한다."""
+    scene = DocumentScene()
+    original = MathBlock(position=(100, 100))
+    original.set_input_text("F = 200 kN")
+    scene.addItem(original)
+    scene.recalculate_all()
+    original.setSelected(True)
+
+    duplicated = scene.duplicate_selected_blocks()
+
+    assert len(duplicated) == 1
+    new_block = duplicated[0]
+    assert new_block.block_id != original.block_id
+    assert new_block.input_text() == "F = 200 kN"
+    assert new_block.pos() != original.pos()
+    assert new_block.isSelected()
+    assert not original.isSelected()  # 복제된 블록만 선택 상태로 남는다
+    assert len(_math_blocks(scene)) == 2
+
+
+def test_duplicate_does_not_touch_clipboard():
+    """복제는 클립보드를 거치지 않으므로, 이전에 복사해둔 내용이 그대로 남아있어야 한다."""
+    scene = DocumentScene()
+    copied_source = TextBlock(position=(0, 0))
+    copied_source.set_text("복사해둔 내용")
+    to_duplicate = TextBlock(position=(0, 100))
+    to_duplicate.set_text("복제할 내용")
+    scene.addItem(copied_source)
+    scene.addItem(to_duplicate)
+
+    copied_source.setSelected(True)
+    scene.copy_selected_blocks()
+    assert scene.can_paste()
+
+    copied_source.setSelected(False)
+    to_duplicate.setSelected(True)
+    scene.duplicate_selected_blocks()
+
+    assert scene.can_paste()
+    pasted = scene.paste_blocks()
+    assert len(pasted) == 1
+    assert pasted[0].text() == "복사해둔 내용"  # 복제가 클립보드를 덮어쓰지 않았음을 확인
+
+
+def test_duplicate_is_undoable():
+    """복제도 한 번의 실행취소로 통째로 사라져야 한다."""
+    scene = DocumentScene()
+    block = TextBlock(position=(0, 0))
+    block.set_text("제목")
+    scene.addItem(block)
+    block.setSelected(True)
+
+    scene.duplicate_selected_blocks()
+    assert len(_text_blocks(scene)) == 2
+
+    scene.undo()
+    assert len(_text_blocks(scene)) == 1
+
+
+def test_duplicate_works_across_block_types():
+    """수식/텍스트/이미지 블록을 함께 선택해서 복제해도 각자 종류에 맞게 복제된다."""
+    scene = DocumentScene()
+    math_block = MathBlock(position=(0, 0))
+    math_block.set_input_text("a = 1")
+    text_block = TextBlock(position=(0, 100))
+    text_block.set_text("설명")
+    image_block = ImageBlock(position=(0, 200))
+    scene.addItem(math_block)
+    scene.addItem(text_block)
+    scene.addItem(image_block)
+    scene.recalculate_all()
+
+    for item in (math_block, text_block, image_block):
+        item.setSelected(True)
+
+    duplicated = scene.duplicate_selected_blocks()
+
+    assert len(duplicated) == 3
+    assert {type(b) for b in duplicated} == {MathBlock, TextBlock, ImageBlock}

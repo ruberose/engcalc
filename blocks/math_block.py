@@ -20,8 +20,8 @@ QGraphicsTextItem을 띄워 원문을 편집시킨다.
 
 import re
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsSceneMouseEvent,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 import pint
 
 from blocks.base_block import BaseBlock
+from blocks.unit_suggestion_popup import UnitSuggestionPopup
 from engine.evaluator import EvalResult, evaluate
 from engine.parser import strip_trailing_calculator_equals
 from engine.scope import Scope
@@ -57,6 +58,12 @@ _MIN_WIDTH = 80.0
 #: 가운뎃점으로 보여준다 (engine/unit_manager.format_unit_expression이
 #: 복합 단위에 쓰는 것과 같은 문자 — 이미 검증된 방식이라 그대로 재사용).
 _MULTIPLICATION_DOT = "·"
+
+#: "200 k" 처럼 숫자 바로 뒤(공백 있어도/없어도)에 오는 글자 일부를 단위
+#: 자동완성 대상으로 잡는다. attach_units()의 단위 인식 규칙(숫자+단위)과
+#: 같은 전제를 쓴다 — 그래야 "sigma"처럼 숫자 없이 시작하는 변수명을
+#: 자동완성이 방해하지 않는다.
+_TRAILING_UNIT_TOKEN = re.compile(r"\d+(?:\.\d+)?[ \t]*([A-Za-z][A-Za-z0-9]*)?$")
 
 
 def _strip_spaces(text: str) -> str:
@@ -104,28 +111,141 @@ def _line_size(metrics: QFontMetrics, pixmap: QPixmap | None, fallback: str | No
     return 0.0, 0.0
 
 
-class _InlineTextEditor(QGraphicsTextItem):
+class _UnitAutocompleteMixin:
+    """
+    _InlineTextEditor/_UnitEditor가 함께 쓰는 단위 자동완성 로직.
+
+    QGraphicsTextItem을 다중 상속하는 mixin이다(순수 파이썬 클래스라 PySide6
+    클래스와 함께 상속해도 안전함). 상속하는 쪽은 아래 두 메서드만 구현하면
+    된다:
+        _current_query() -> str | None : 지금 완성해야 할 부분 문자열
+                                          (완성 대상이 없으면 None)
+        _apply_suggestion(text)        : 고른 후보를 문서에 반영하는 방법
+    나머지(팝업 띄우기/방향키 이동/Enter·클릭으로 확정/Esc로 닫기)는
+    여기서 공통으로 처리한다.
+    """
+
+    def _init_suggestions(self) -> None:
+        self._suggestions = UnitSuggestionPopup()
+        self._suggestions.itemClicked.connect(lambda _item: self._accept_suggestion())
+        self._suppress_next_update = False
+        self.document().contentsChanged.connect(self._update_suggestions)
+
+    def _hide_suggestions(self) -> None:
+        self._suggestions.hide()
+
+    def _handle_suggestion_key(self, event) -> bool:
+        """팝업이 떠 있을 때 방향키/Enter/Tab/Esc를 처리한다. 처리했으면 True(호출한 쪽은 더 이상 진행하지 않음)."""
+        if not self._suggestions.isVisible():
+            return False
+        key = event.key()
+        if key == Qt.Key.Key_Down:
+            self._suggestions.move_selection(1)
+        elif key == Qt.Key.Key_Up:
+            self._suggestions.move_selection(-1)
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Tab):
+            self._accept_suggestion()
+        elif key == Qt.Key.Key_Escape:
+            self._suggestions.hide()
+        else:
+            return False
+        event.accept()
+        return True
+
+    def _accept_suggestion(self) -> None:
+        """선택된 후보로 확정한다. contentsChanged가 다시 울려도 팝업이 또 뜨지 않게 한 번 억제한다."""
+        text = self._suggestions.selected_text()
+        if text is None:
+            return
+        self._suppress_next_update = True
+        self._apply_suggestion(text)
+        self._suggestions.hide()
+
+    def _update_suggestions(self) -> None:
+        """문서 내용이 바뀔 때마다(타이핑할 때마다) 후보를 다시 계산해서 띄운다."""
+        if self._suppress_next_update:
+            self._suppress_next_update = False
+            return
+        query = self._current_query()
+        if not query:
+            self._suggestions.hide()
+            return
+        pos = self._popup_position()
+        if pos is None:  # 씬에 아직 뷰가 안 붙어 있으면(예: 일부 테스트) 그냥 건너뜀
+            self._suggestions.hide()
+            return
+        self._suggestions.show_matches(query, pos)
+
+    def _popup_position(self) -> QPoint | None:
+        """편집창 좌측 하단 모서리를 스크린 좌표로 변환한다 (팝업을 띄울 위치)."""
+        scene = self.scene()
+        if scene is None:
+            return None
+        views = scene.views()
+        if not views:
+            return None
+        view = views[0]
+        bottom_left_scene = self.mapToScene(self.boundingRect().bottomLeft())
+        bottom_left_view = view.mapFromScene(bottom_left_scene)
+        return view.viewport().mapToGlobal(bottom_left_view)
+
+
+class _InlineTextEditor(_UnitAutocompleteMixin, QGraphicsTextItem):
     """MathBlock이 편집 모드일 때만 잠깐 만들어지는 실제 입력창 (TextBlock과 동일한 패턴)."""
 
     def __init__(self, parent_block: "MathBlock") -> None:
         super().__init__(parent_block)
         self._parent_block = parent_block
+        self._init_suggestions()
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
-        """편집창 밖을 클릭하면 편집을 마무리한다."""
+        """
+        편집창 밖을 클릭하면 편집을 마무리한다.
+
+        Note:
+            자동완성 팝업(진짜 최상위 창)을 띄우면 그 자체가 OS 포커스를
+            가져가서 이 편집창도 "포커스를 잃었다"는 이벤트를 받는다 —
+            Qt는 이런 경우 이유를 Qt.FocusReason.PopupFocusReason으로
+            구분해준다. 이땐 사용자가 진짜로 바깥을 클릭한 게 아니므로
+            편집을 끝내면 안 된다(팝업만 그대로 두고 넘어감).
+        """
+        if event.reason() == Qt.FocusReason.PopupFocusReason:
+            return
+        self._hide_suggestions()
         super().focusOutEvent(event)
         self._parent_block.finish_editing()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        """Enter로도 편집을 끝낼 수 있게 한다 (수식 한 줄은 여러 줄이 필요 없으므로)."""
+        """단위 자동완성 팝업이 떠 있으면 방향키/Enter가 그쪽으로 먼저 간다. 그 다음 Enter로 편집을 끝낼 수 있다."""
+        if self._handle_suggestion_key(event):
+            return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._hide_suggestions()
             self._parent_block.finish_editing()
             event.accept()
             return
         super().keyPressEvent(event)
 
+    def _current_query(self) -> str | None:
+        """커서 바로 앞이 "숫자(+공백)+글자 일부"면(예: "200 k") 그 글자 부분을 완성 대상으로 삼는다."""
+        cursor = self.textCursor()
+        text_before_cursor = self.toPlainText()[: cursor.position()]
+        match = _TRAILING_UNIT_TOKEN.search(text_before_cursor)
+        return match.group(1) if match else None
 
-class _UnitEditor(QGraphicsTextItem):
+    def _apply_suggestion(self, text: str) -> None:
+        """지금 입력 중이던 부분 단위만 지우고 고른 후보로 바꿔치기한다(나머지 수식은 그대로 둠)."""
+        cursor = self.textCursor()
+        text_before_cursor = self.toPlainText()[: cursor.position()]
+        match = _TRAILING_UNIT_TOKEN.search(text_before_cursor)
+        partial_len = len(match.group(1)) if match and match.group(1) else 0
+        for _ in range(partial_len):
+            cursor.deletePreviousChar()
+        cursor.insertText(text)
+        self.setTextCursor(cursor)
+
+
+class _UnitEditor(_UnitAutocompleteMixin, QGraphicsTextItem):
     """
     결과의 표시 단위만 편집하는 작은 인라인 에디터.
 
@@ -136,19 +256,37 @@ class _UnitEditor(QGraphicsTextItem):
     def __init__(self, parent_block: "MathBlock") -> None:
         super().__init__(parent_block)
         self._parent_block = parent_block
+        self._init_suggestions()
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
-        """편집창 밖을 클릭하면 편집을 마무리한다."""
+        """편집창 밖을 클릭하면 편집을 마무리한다 (자동완성 팝업 때문에 잠깐 포커스를 잃은 경우는 예외 — _InlineTextEditor.focusOutEvent 참고)."""
+        if event.reason() == Qt.FocusReason.PopupFocusReason:
+            return
+        self._hide_suggestions()
         super().focusOutEvent(event)
         self._parent_block.finish_unit_editing()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        """Enter로도 편집을 끝낼 수 있게 한다."""
+        """단위 자동완성 팝업이 떠 있으면 방향키/Enter가 그쪽으로 먼저 간다. 그 다음 Enter로 편집을 끝낼 수 있다."""
+        if self._handle_suggestion_key(event):
+            return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._hide_suggestions()
             self._parent_block.finish_unit_editing()
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def _current_query(self) -> str | None:
+        """단위 편집창은 필드 전체가 단위 하나이므로, 입력된 전체 텍스트가 완성 대상이다."""
+        return self.toPlainText() or None
+
+    def _apply_suggestion(self, text: str) -> None:
+        """전체 내용을 고른 후보로 바꾼다."""
+        self.setPlainText(text)
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.setTextCursor(cursor)
 
 
 class MathBlock(BaseBlock):

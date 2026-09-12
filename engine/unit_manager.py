@@ -23,6 +23,29 @@ ureg.define("tonf = 9.80665 * kilonewton = tf")
 
 Quantity = ureg.Quantity
 
+#: 단위 자동완성(blocks/unit_suggestion_popup.py)에 후보로 보여줄 단위 이름 목록.
+#: Pint가 아는 단위는 SI 접두어 조합까지 합치면 수천 개라 그대로 보여주면
+#: 오히려 방해가 된다 — docs/사용법.txt "지원하는 단위" 목록과 맞춰서, 이
+#: 프로그램이 실제로 문서화하고 실무에서 쓸 법한 단위만 추렸다.
+KNOWN_UNIT_NAMES: tuple[str, ...] = (
+    # 길이
+    "m", "cm", "mm", "km", "in", "ft", "yd",
+    # 체적 (면적/체적은 대부분 m*m 처럼 계산으로 얻어지지만 L은 리터럴로도 씀)
+    "L",
+    # 힘
+    "N", "kN", "MN", "kgf", "tonf", "lbf",
+    # 응력
+    "Pa", "kPa", "MPa", "GPa", "psi", "ksi",
+    # 질량
+    "kg", "g", "ton", "lb",
+    # 시간
+    "s", "min", "hr",
+    # 온도
+    "degC", "degF", "K",
+    # 각도
+    "deg", "rad",
+)
+
 
 def make_quantity(magnitude: Any, unit_text: str) -> Quantity:
     """

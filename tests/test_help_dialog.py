@@ -101,6 +101,21 @@ def test_formula_syntax_tab_has_content():
     dialog.close()
 
 
+def test_formula_syntax_tab_documents_unit_autocomplete():
+    """
+    사용자 요청: "단위 입력 자동완성... 이거도 만들자"
+
+    단위 자동완성 사용법(방향키/Enter/Esc)이 "수식 작성법" 탭에 안내되어
+    있는지 확인한다.
+    """
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    formula_text = tabs.widget(1).toPlainText()
+    assert "단위 자동완성" in formula_text
+    assert "Esc" in formula_text
+    dialog.close()
+
+
 def test_help_dialog_documents_calculation_level():
     """
     사용자 요청: "어느 수준까지 되는지 나한테 알려주고, 도움말에도 추가해줘"

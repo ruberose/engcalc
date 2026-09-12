@@ -70,7 +70,9 @@ def test_accepting_print_dialog_calls_print_scene_with_title(window, monkeypatch
 
     calls = []
     monkeypatch.setattr(
-        main_window_module, "print_scene", lambda scene, printer, title="": calls.append((scene, title)) or True
+        main_window_module,
+        "print_scene",
+        lambda scene, printer, title="", **kwargs: calls.append((scene, title)) or True,
     )
 
     window._on_print()
@@ -108,7 +110,7 @@ def test_print_clears_selection_and_restores_grid_visibility(window, monkeypatch
 
     grid_visible_during_print = []
 
-    def fake_print_scene(scene, printer, title=""):
+    def fake_print_scene(scene, printer, title="", **kwargs):
         grid_visible_during_print.append(scene._grid_visible)
         return True
 

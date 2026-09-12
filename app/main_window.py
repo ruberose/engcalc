@@ -27,6 +27,7 @@ from file_io.file_manager import load_document, save_document
 from file_io.pdf_exporter import DEFAULT_MARGIN_MM, export_to_pdf, print_scene
 from ui.find_dialog import FindDialog
 from ui.help_dialog import HelpDialog
+from ui.document_properties_dialog import DocumentPropertiesDialog
 from ui.new_document_dialog import NewDocumentDialog
 from ui.property_panel import PropertyPanel
 from ui.variable_inspector import VariableInspector
@@ -71,6 +72,15 @@ class MainWindow(QMainWindow):
         self._created_at: str = datetime.now().isoformat()
         self._is_modified: bool = False
         self._recovered_from_autosave: bool = False  # 복구된 내용이면 "수정됨" 표시를 지우면 안 됨
+
+        # --- 문서 속성 (메뉴 > 파일 > 문서 속성...) ---
+        # 제목/작성자가 비어 있으면 PDF/인쇄 머리글에 파일명을 대신 쓴다.
+        # 창 제목 표시줄은 이 제목이 아니라 항상 파일명 기준이다(대부분의
+        # 앱에서 "문서 제목"과 "파일명"은 별개 개념이라, 파일 저장 규칙과
+        # 헷갈리지 않게 구분해뒀다).
+        self._document_title: str = ""
+        self._document_author: str = ""
+        self._show_header_footer: bool = False
         self._help_dialog: HelpDialog | None = None  # 도움말 창은 처음 열 때 한 번만 만든다
         self._find_dialog: FindDialog | None = None  # 찾기 창도 처음 열 때 한 번만 만든다
 
@@ -200,6 +210,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         insert_image_action = file_menu.addAction("이미지 삽입(&I)...")
         insert_image_action.triggered.connect(self._on_insert_image)
+
+        file_menu.addSeparator()
+        document_properties_action = file_menu.addAction("문서 속성(&D)...")
+        document_properties_action.triggered.connect(self._on_document_properties)
 
         file_menu.addSeparator()
         print_action = file_menu.addAction("인쇄(&T)...")
@@ -388,6 +402,19 @@ class MainWindow(QMainWindow):
         mark = "*" if self._is_modified else ""
         self.setWindowTitle(f"{mark}{name} - EngCalc")
 
+    def _document_display_title(self) -> str:
+        """
+        PDF 내보내기/인쇄 머리글과 파일 선택 대화상자에 쓸 제목.
+
+        Note:
+            창 제목 표시줄은 항상 파일명 기준(_update_window_title)이지만, 이
+            제목은 "문서 속성"에서 사용자가 직접 정한 값이 있으면 그걸
+            우선한다 — 없으면 지금까지처럼 파일명(또는 "제목 없음")을 쓴다.
+        """
+        if self._document_title:
+            return self._document_title
+        return Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+
     # --- 자동 저장 / 비정상 종료 복구 ---
 
     def _check_autosave_recovery(self) -> None:
@@ -432,6 +459,9 @@ class MainWindow(QMainWindow):
         self._scene.load_blocks_list(blocks)
         self._current_file_path = original_path
         self._created_at = metadata.get("created", datetime.now().isoformat())
+        self._document_title = metadata.get("title", "")
+        self._document_author = metadata.get("author", "")
+        self._show_header_footer = metadata.get("show_header_footer", False)
         self._recovered_from_autosave = True
         self._is_modified = True
         self._update_window_title()
@@ -447,7 +477,9 @@ class MainWindow(QMainWindow):
         data: dict[str, Any] = {
             "version": _DOCUMENT_VERSION,
             "metadata": {
-                "title": Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE,
+                "title": self._document_title,
+                "author": self._document_author,
+                "show_header_footer": self._show_header_footer,
                 "created": self._created_at,
                 "modified": datetime.now().isoformat(),
                 # 복구했을 때 원래 파일로 되돌려 저장할 수 있도록 원본 경로도 같이 적어둔다.
@@ -487,6 +519,9 @@ class MainWindow(QMainWindow):
         self._scene.set_document_format(document_format, paper_size)
         self._current_file_path = None
         self._created_at = datetime.now().isoformat()
+        self._document_title = ""
+        self._document_author = ""
+        self._show_header_footer = False
         self._is_modified = False
         self._clear_autosave()  # 이전 문서의 자동 저장 내용은 더 이상 의미가 없음
         self._update_window_title()
@@ -527,6 +562,9 @@ class MainWindow(QMainWindow):
             metadata.get("document_format", "freeform"), metadata.get("paper_size", "A4")
         )
         self._created_at = metadata.get("created", datetime.now().isoformat())
+        self._document_title = metadata.get("title", "")
+        self._document_author = metadata.get("author", "")
+        self._show_header_footer = metadata.get("show_header_footer", False)
         self._current_file_path = file_path
         self._is_modified = False
         self._clear_autosave()  # 방금 진짜 파일을 열었으니 이전 자동 저장 내용은 의미가 없음
@@ -558,8 +596,9 @@ class MainWindow(QMainWindow):
         data: dict[str, Any] = {
             "version": _DOCUMENT_VERSION,
             "metadata": {
-                "title": Path(file_path).stem,
-                "author": "",
+                "title": self._document_title,
+                "author": self._document_author,
+                "show_header_footer": self._show_header_footer,
                 "created": self._created_at,
                 "modified": now,
                 "document_format": self._scene.document_format(),
@@ -660,6 +699,41 @@ class MainWindow(QMainWindow):
         if block is None:
             self.statusBar().showMessage(f"이미지를 불러올 수 없습니다: {file_path}", 5000)
 
+    # --- 문서 속성 ---
+
+    def _on_document_properties(self) -> None:
+        """
+        문서 속성(제목/작성자, 머리글·바닥글 표시 여부) 대화상자를 띄운다.
+
+        Note:
+            여기서 바꾼 값은 파일에 저장되는 문서 상태이므로(_save_to_path()/
+            _write_autosave() 참고), "수정됨" 표시도 같이 갱신한다.
+        """
+        fallback_title = Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+        dialog = DocumentPropertiesDialog(
+            title=self._document_title,
+            author=self._document_author,
+            show_header_footer=self._show_header_footer,
+            default_title_hint=fallback_title,
+            parent=self,
+        )
+        if dialog.exec() != DocumentPropertiesDialog.DialogCode.Accepted:
+            return
+
+        title, author, show_header_footer = dialog.result_properties()
+        if (title, author, show_header_footer) == (
+            self._document_title,
+            self._document_author,
+            self._show_header_footer,
+        ):
+            return  # 실제로 바뀐 게 없으면 "수정됨" 표시를 켤 필요 없음
+
+        self._document_title = title
+        self._document_author = author
+        self._show_header_footer = show_header_footer
+        self._is_modified = True
+        self._update_window_title()
+
     # --- PDF 내보내기 ---
 
     def _on_export_pdf(self) -> None:
@@ -671,7 +745,7 @@ class MainWindow(QMainWindow):
             내보내기 전에 선택을 해제한다. 격자 배경도 인쇄용으로는 지저분해
             보이므로 내보내는 동안만 꺼둔다(scene.set_grid_visible).
         """
-        default_name = Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+        default_name = self._document_display_title()
         file_path, _selected_filter = QFileDialog.getSaveFileName(
             self, "PDF로 내보내기", f"{default_name}.pdf", "PDF 파일 (*.pdf)"
         )
@@ -683,7 +757,13 @@ class MainWindow(QMainWindow):
         self._scene.clearSelection()
         self._scene.set_grid_visible(False)
         try:
-            exported = export_to_pdf(self._scene, file_path, title=default_name)
+            exported = export_to_pdf(
+                self._scene,
+                file_path,
+                title=default_name,
+                author=self._document_author,
+                show_header_footer=self._show_header_footer,
+            )
         except OSError as exc:
             QMessageBox.critical(self, "PDF 내보내기 실패", f"PDF를 저장할 수 없습니다:\n{file_path}\n\n{exc}")
             return
@@ -712,7 +792,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "인쇄할 내용 없음", "캔버스에 블록이 없어서 인쇄할 내용이 없습니다.")
             return
 
-        default_name = Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+        default_name = self._document_display_title()
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
@@ -729,7 +809,13 @@ class MainWindow(QMainWindow):
         self._scene.clearSelection()
         self._scene.set_grid_visible(False)
         try:
-            print_scene(self._scene, printer, title=default_name)
+            print_scene(
+                self._scene,
+                printer,
+                title=default_name,
+                author=self._document_author,
+                show_header_footer=self._show_header_footer,
+            )
         finally:
             self._scene.set_grid_visible(True)
 

@@ -42,6 +42,7 @@ def export_to_pdf(
     scene: QGraphicsScene,
     file_path: str,
     title: str = "",
+    author: str = "",
     margin_mm: float = DEFAULT_MARGIN_MM,
     show_header_footer: bool = False,
 ) -> bool:
@@ -54,11 +55,11 @@ def export_to_pdf(
                해두는 걸 권장한다.
         file_path: 저장할 .pdf 파일 경로
         title: 머리글에 표시할 문서 제목 (비어 있으면 "EngCalc 문서")
+        author: 머리글에 표시할 작성자 (비어 있으면 표시하지 않음)
         margin_mm: 용지 여백(mm), 네 방향 동일하게 적용
-        show_header_footer: 머리글(제목+날짜)/바닥글(페이지 번호) + 구분선을
-            찍을지. 기본은 꺼짐 — 나중에 이 머리글/바닥글을 사용자가 직접
-            구성하는 기능이 따로 생길 예정이라, 그 전까지는 내보내기 결과가
-            화면 내용만 깔끔하게 담도록 기본값을 off로 둔다.
+        show_header_footer: 머리글(제목+작성자+날짜)/바닥글(페이지 번호) +
+            구분선을 찍을지. 기본은 꺼짐 — 메뉴 > 파일 > 문서 속성...에서
+            사용자가 직접 켤 수 있다(ui/document_properties_dialog.py).
 
     Returns:
         성공하면 True. 캔버스에 블록이 하나도 없으면(내보낼 내용이 없으면) False.
@@ -74,12 +75,14 @@ def export_to_pdf(
 
     painter = QPainter(writer)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    _render_scene_to_paged_device(scene, writer, painter, title, show_header_footer)
+    _render_scene_to_paged_device(scene, writer, painter, title, author, show_header_footer)
     painter.end()
     return True
 
 
-def print_scene(scene: QGraphicsScene, printer: QPrinter, title: str = "", show_header_footer: bool = False) -> bool:
+def print_scene(
+    scene: QGraphicsScene, printer: QPrinter, title: str = "", author: str = "", show_header_footer: bool = False
+) -> bool:
     """
     씬의 내용을 이미 인쇄 대화상자를 통과한 QPrinter에 인쇄한다.
 
@@ -93,6 +96,7 @@ def print_scene(scene: QGraphicsScene, printer: QPrinter, title: str = "", show_
                  통과한 뒤). 그 설정을 그대로 존중해서 그린다 — 여기서 임의로
                  A4나 여백을 강제하지 않는다(사용자가 대화상자에서 고른 값 우선).
         title: 머리글에 표시할 문서 제목 (비어 있으면 "EngCalc 문서")
+        author: 머리글에 표시할 작성자 (비어 있으면 표시하지 않음)
         show_header_footer: export_to_pdf()와 동일 — 기본은 꺼짐.
 
     Returns:
@@ -104,13 +108,18 @@ def print_scene(scene: QGraphicsScene, printer: QPrinter, title: str = "", show_
 
     painter = QPainter(printer)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    _render_scene_to_paged_device(scene, printer, painter, title, show_header_footer)
+    _render_scene_to_paged_device(scene, printer, painter, title, author, show_header_footer)
     painter.end()
     return True
 
 
 def _render_scene_to_paged_device(
-    scene: QGraphicsScene, writer: _PagedDevice, painter: QPainter, title: str, show_header_footer: bool
+    scene: QGraphicsScene,
+    writer: _PagedDevice,
+    painter: QPainter,
+    title: str,
+    author: str,
+    show_header_footer: bool,
 ) -> None:
     """
     이미 페이지 크기/여백이 정해지고 painter가 시작된 장치(writer)에, 씬을
@@ -151,7 +160,7 @@ def _render_scene_to_paged_device(
 
         scene.render(painter, target_rect, source_rect, Qt.AspectRatioMode.KeepAspectRatio)
         if show_header_footer:
-            _draw_header(painter, page_rect, header_h, display_title)
+            _draw_header(painter, page_rect, header_h, display_title, author)
             _draw_footer(painter, page_rect, footer_h, page_index + 1, page_count)
 
 
@@ -160,8 +169,10 @@ def _mm_to_px(value_mm: float, dpi: int) -> float:
     return value_mm / 25.4 * dpi
 
 
-def _draw_header(painter: QPainter, page_rect: QRectF, header_h: float, title: str) -> None:
-    """머리글: 왼쪽에 문서 제목, 오른쪽에 오늘 날짜, 아래에 구분선."""
+def _draw_header(painter: QPainter, page_rect: QRectF, header_h: float, title: str, author: str = "") -> None:
+    """
+    머리글: 왼쪽에 문서 제목(+ 작성자가 있으면 그 아래 작게), 오른쪽에 오늘 날짜, 아래에 구분선.
+    """
     painter.save()
     header_rect = QRectF(0, 0, page_rect.width(), header_h)
 
@@ -169,7 +180,18 @@ def _draw_header(painter: QPainter, page_rect: QRectF, header_h: float, title: s
     title_font.setPointSize(12)
     title_font.setBold(True)
     painter.setFont(title_font)
-    painter.drawText(header_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+    if author:
+        # 작성자를 표시할 자리가 필요하니, 제목은 위쪽 절반에 맞춘다.
+        title_rect = QRectF(0, 0, page_rect.width(), header_h * 0.6)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom, title)
+
+        author_font = QFont()
+        author_font.setPointSize(9)
+        painter.setFont(author_font)
+        author_rect = QRectF(0, header_h * 0.6, page_rect.width(), header_h * 0.4)
+        painter.drawText(author_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, f"작성: {author}")
+    else:
+        painter.drawText(header_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
 
     date_font = QFont()
     date_font.setPointSize(9)

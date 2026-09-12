@@ -39,6 +39,7 @@ from engine.parser import strip_trailing_calculator_equals
 from engine.scope import Scope
 from engine.unit_manager import Quantity, format_unit_expression
 from rendering.math_renderer import render_to_pixmap
+from rendering.symbolic_display import MARKUP_CHARS, to_symbolic_display
 
 # --- 서식 상수 ---
 INPUT_FONT_SIZE = 14
@@ -73,19 +74,23 @@ def _strip_spaces(text: str) -> str:
 
 def _display_text(text: str) -> str:
     """
-    화면에 보여줄 때만 "*"를 곱셈 기호(가운뎃점)로 바꾼다.
+    화면에 보여줄 때만 계산 문법을 실제 수식 기호로 바꾼다: "*" -> 가운뎃점,
+    sqrt()/cbrt()/root() -> 루트 기호, 그리스 문자 변수명 -> 그리스 문자,
+    나눗셈(/) -> 분수 막대(rendering/symbolic_display.py의 to_symbolic_display).
 
     Note:
         계산(engine.evaluator.evaluate)에 넘어가는 self._input_text 원문은
-        건드리지 않는다 — SymPy 파서는 "*"를 곱셈 연산자로 기대하므로,
-        여기서 바뀐 문자열은 오직 렌더링(_render_line)에만 쓰여야 한다.
+        건드리지 않는다 — SymPy 파서는 "*"나 "/" 같은 원래 문법을 그대로
+        기대하므로, 여기서 바뀐 문자열은 오직 렌더링(_render_line)에만
+        쓰여야 한다.
     """
-    return text.replace("*", _MULTIPLICATION_DOT)
+    dotted = text.replace("*", _MULTIPLICATION_DOT)
+    return to_symbolic_display(dotted)
 
 
 def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap | None, str | None]:
     """
-    한 줄을 mathtext로 렌더링해본다 ("*"는 화면 표시용 가운뎃점으로 바꿔서).
+    한 줄을 mathtext로 렌더링해본다 (_display_text로 표시용 기호로 바꿔서).
 
     Returns:
         (pixmap, None): mathtext 렌더링 성공 — pixmap을 그대로 그리면 됨
@@ -95,7 +100,12 @@ def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap |
     if not text.strip():
         return None, None
     display = _display_text(text)
-    pixmap = render_to_pixmap(display, font_size)
+    # display에 백슬래시/중괄호가 있는데 원문(text)엔 없었다면, to_symbolic_display가
+    # 안전하게 직접 만들어 넣은 것이다(\sqrt{}, \frac{}{} 등) — 이때만 mathtext의
+    # LaTeX 거부 가드를 건너뛴다. 원문에 이미 있었다면(사용자가 실수로 타이핑한
+    # LaTeX) to_symbolic_display가 손대지 않으므로 가드가 그대로 적용되어야 한다.
+    added_markup = any(ch in display for ch in MARKUP_CHARS) and not any(ch in text for ch in MARKUP_CHARS)
+    pixmap = render_to_pixmap(display, font_size, skip_markup_guard=added_markup)
     if pixmap.isNull():
         return None, display
     return pixmap, None

@@ -74,3 +74,65 @@ def test_real_comparison_operator_is_not_affected_by_trailing_strip():
     """">=" 같은 진짜 비교 연산자는 trailing "=" 제거 로직에 영향받으면 안 된다."""
     block = _evaluated_block("a >=")
     assert block.input_text() == "a >="
+
+
+# --- 계산 문법에 맞는 기호 표시 (루트/그리스 문자/분수) ---
+#
+# 사용자 요청: "계산용 문법을 쓰더라도 그 문법에 맞는 기호가 나타났으면 좋겠어"
+# rendering/symbolic_display.py의 실제 변환 로직 자체는 tests/test_symbolic_display.py가
+# 검증하므로, 여기서는 MathBlock까지 조립됐을 때 실제로 픽스맵이 만들어지는지
+# (표시 전용 변환이 렌더링을 깨뜨리지 않는지)와 계산 결과가 그대로인지를 확인한다.
+
+
+def test_sqrt_expression_still_computes_correctly_after_display_change():
+    """화면 표시가 "sqrt(x)" -> "\\sqrt{x}"로 바뀌어도 계산 결과 자체는 그대로여야 한다."""
+    block = _evaluated_block("sqrt(16)")
+    assert block.result() is not None
+    assert not block.result().is_error
+    assert float(block.result().value) == 4.0
+
+
+def test_sqrt_input_line_renders_as_pixmap_not_fallback():
+    block = _evaluated_block("sqrt(16)")
+    assert block._input_pixmap is not None
+    assert block._input_fallback is None
+
+
+def test_greek_variable_expression_still_computes_correctly():
+    scope = Scope()
+    block = _evaluated_block("sigma_allow = 140", scope)
+    assert block.result() is not None
+    assert not block.result().is_error
+
+
+def test_greek_variable_input_line_renders_as_pixmap():
+    block = _evaluated_block("sigma_allow = 140")
+    assert block._input_pixmap is not None
+    assert block._input_fallback is None
+
+
+def test_fraction_expression_still_computes_correctly():
+    scope = Scope()
+    _evaluated_block("A = 10", scope)
+    _evaluated_block("B = 2", scope)
+    block = _evaluated_block("A/B", scope)
+    assert block._result_line_text() == "= 5"
+
+
+def test_fraction_input_line_renders_as_pixmap():
+    block = _evaluated_block("A/B")
+    assert block._input_pixmap is not None
+    assert block._input_fallback is None
+
+
+def test_user_typed_latex_still_falls_back_and_errors():
+    """
+    회귀 테스트: 사용자가 실수로 진짜 LaTeX(\\sqrt{x})를 타이핑하면, 지금처럼
+    화면도 안 예뻐지고(plain text 대체) 계산도 에러여야 한다 — symbolic_display가
+    "원본에 백슬래시가 있으면 손대지 않는다"는 안전장치를 지키는지 확인.
+    """
+    block = _evaluated_block("\\sqrt{16}")
+    assert block._input_pixmap is None
+    assert block._input_fallback == "\\sqrt{16}"
+    assert block.result() is not None
+    assert block.result().is_error

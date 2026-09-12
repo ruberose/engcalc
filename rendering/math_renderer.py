@@ -31,8 +31,17 @@ from PySide6.QtGui import QPixmap  # noqa: E402
 #: 보여주도록 한다(호출하는 쪽이 대체 표시를 맡음).
 _LATEX_MARKUP_CHARS = ("\\", "{", "}")
 
+#: 아래 비-ASCII 검사에서 예외로 허용하는 문자 — mathtext 기본 폰트로 문제없이
+#: 그려지는 게 확인된 것들만 넣는다. 가운뎃점(·)은 blocks/math_block.py가
+#: 곱하기 표시에 쓰는 문자인데, 이게 곱하기 낀 모든 식을 "비-ASCII 포함"으로
+#: 걸러서 플레인 텍스트 대체(fallback)로 떨어뜨리면, 같은 식 안의 \sqrt{}나
+#: \frac{}{} 같은 수식 기호도 렌더링 안 되고 raw 텍스트로 보이는 문제가 있었다.
+_ALLOWED_NON_ASCII_CHARS = "·"
 
-def render_to_pixmap(text: str, font_size: int = 14, dpi: int = 150, color: str = "black") -> QPixmap:
+
+def render_to_pixmap(
+    text: str, font_size: int = 14, dpi: int = 150, color: str = "black", skip_markup_guard: bool = False
+) -> QPixmap:
     """
     문자열을 수식처럼 렌더링한다 (mathtext의 수식 모드로 감싸서 그림).
 
@@ -41,20 +50,32 @@ def render_to_pixmap(text: str, font_size: int = 14, dpi: int = 150, color: str 
         font_size: 폰트 크기(pt)
         dpi: 해상도
         color: 글자 색 (matplotlib이 이해하는 색 이름 또는 hex)
+        skip_markup_guard: True면 백슬래시/중괄호가 있어도 거부하지 않는다.
+            rendering/symbolic_display.py가 "원본에 백슬래시가 없었을 때만"
+            안전하게 \\sqrt{}/\\frac{}{} 같은 문법을 만들어 넣으므로, 그렇게
+            만들어진(우리가 직접 생성한) 텍스트에 한해서만 호출부가 True로
+            넘긴다 — 사용자가 실수로 타이핑한 진짜 LaTeX까지 예뻐 보이면
+            "화면은 되는데 계산은 안 되는" 혼란이 다시 생기므로, 기본값은
+            반드시 False로 둬야 한다.
 
     Returns:
         렌더링된 이미지(배경 투명). mathtext 문법 오류나 LaTeX 문법(위
-        _LATEX_MARKUP_CHARS 참고) 포함 등으로 실패하면 빈 QPixmap을 반환한다 —
-        호출하는 쪽(MathBlock)이 이를 "렌더링할 것 없음"으로 취급하고 원본
-        텍스트로 대체해서 그리면 되므로, 여기서 예외를 앱 밖으로 던지지 않는다.
+        _LATEX_MARKUP_CHARS 참고, skip_markup_guard=False일 때만 적용) 포함
+        등으로 실패하면 빈 QPixmap을 반환한다 — 호출하는 쪽(MathBlock)이
+        이를 "렌더링할 것 없음"으로 취급하고 원본 텍스트로 대체해서 그리면
+        되므로, 여기서 예외를 앱 밖으로 던지지 않는다.
 
     Note:
         mathtext 기본 폰트(dejavusans 등)에는 한글 글리프가 없어서,
         "sigma_허용" 같은 한글 섞인 변수명을 그대로 넣으면 깨진 기호로 보인다.
         그래서 텍스트에 ASCII가 아닌 문자가 섞여 있으면 아예 렌더링을 포기하고
         빈 QPixmap을 돌려준다 — 호출하는 쪽이 일반(한글 지원) 폰트로 대신 그린다.
+        (단, _ALLOWED_NON_ASCII_CHARS에 있는 문자는 예외 — 실제로 문제없이
+        그려지는 게 확인됐으므로 이 검사에서 미리 제외한다.)
     """
-    if not text.isascii() or any(ch in text for ch in _LATEX_MARKUP_CHARS):
+    if not text.translate(str.maketrans("", "", _ALLOWED_NON_ASCII_CHARS)).isascii():
+        return QPixmap()
+    if not skip_markup_guard and any(ch in text for ch in _LATEX_MARKUP_CHARS):
         return QPixmap()
 
     safe_text = text.replace("$", r"\$")

@@ -24,6 +24,7 @@ from blocks.math_block import MathBlock
 from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
+from file_io.image_exporter import export_to_png
 from file_io.pdf_exporter import DEFAULT_MARGIN_MM, export_to_pdf, print_scene
 from ui.find_dialog import FindDialog
 from ui.help_dialog import HelpDialog
@@ -216,6 +217,9 @@ class MainWindow(QMainWindow):
 
         export_pdf_action = file_menu.addAction("PDF로 내보내기(&P)...")
         export_pdf_action.triggered.connect(self._on_export_pdf)
+
+        export_png_action = file_menu.addAction("PNG로 내보내기(&M)...")
+        export_png_action.triggered.connect(self._on_export_png)
 
         edit_menu = menu_bar.addMenu("편집(&E)")
 
@@ -797,6 +801,41 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
         else:
             QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 PDF를 만들지 않았습니다.")
+
+    # --- PNG 내보내기 ---
+
+    def _on_export_png(self) -> None:
+        """
+        파일 선택 대화상자를 띄워 현재 문서를 PNG 이미지로 내보낸다.
+
+        Note:
+            PDF 내보내기와 같은 이유로 선택 해제 + 격자 숨김 처리를 한다.
+            PDF와 달리 페이지 개념이 없어서, 캔버스 내용 전체를 여백만 살짝
+            두고 한 장의 이미지에 담는다(file_io/image_exporter.py).
+        """
+        default_name = self._document_display_title()
+        file_path, _selected_filter = QFileDialog.getSaveFileName(
+            self, "PNG로 내보내기", f"{default_name}.png", "PNG 이미지 (*.png)"
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".png"):
+            file_path += ".png"
+
+        self._scene.clearSelection()
+        self._scene.set_grid_visible(False)
+        try:
+            exported = export_to_png(self._scene, file_path)
+        except OSError as exc:
+            QMessageBox.critical(self, "PNG 내보내기 실패", f"이미지를 저장할 수 없습니다:\n{file_path}\n\n{exc}")
+            return
+        finally:
+            self._scene.set_grid_visible(True)
+
+        if exported:
+            self.statusBar().showMessage(f"PNG로 내보냈습니다: {file_path}", 3000)
+        else:
+            QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 이미지를 만들지 않았습니다.")
 
     # --- 인쇄 ---
 

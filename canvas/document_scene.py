@@ -10,7 +10,7 @@ import math
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
 from blocks.base_block import BaseBlock
@@ -291,11 +291,25 @@ class DocumentScene(QGraphicsScene):
             (예: 손상된 파일, 지원하지 않는 형식) — 이 경우 블록을 만들지 않는다.
         """
         pixmap = load_pixmap_from_file(file_path)
+        return self.create_image_block_from_pixmap(scene_pos, pixmap)
+
+    def create_image_block_from_pixmap(self, scene_pos: QPointF, pixmap: QPixmap, caption: str = "") -> ImageBlock | None:
+        """
+        이미 메모리에 있는 QPixmap으로 주어진 씬 좌표에 ImageBlock을 만들어 추가한다.
+
+        메뉴/드래그앤드롭용 create_image_block_from_file()과, 클립보드 이미지
+        붙여넣기(app/main_window.py의 _on_paste)가 공용으로 쓴다 — 파일이든
+        클립보드든 결국 QPixmap 하나로 귀결되므로, 실제 블록 생성 로직은
+        여기 한 곳에만 있다.
+
+        Returns:
+            성공하면 만들어진 ImageBlock, pixmap이 비어 있으면(null) None.
+        """
         if pixmap.isNull():
             return None
 
         before = self.capture_undo_snapshot()
-        block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap)
+        block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap, caption=caption)
         self.addItem(block)
         self.commit_undo_snapshot(before)
         return block

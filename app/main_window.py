@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QMarginsF, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPageLayout, QPageSize
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPageLayout, QPageSize, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMessageBox
 
 from app.settings import add_recent_file, autosave_file_path, clear_recent_files, get_recent_files
 from blocks.base_block import BaseBlock
@@ -363,13 +363,40 @@ class MainWindow(QMainWindow):
         self._update_edit_menu_state()
 
     def _on_paste(self) -> None:
-        """붙여넣기 메뉴/단축키(Ctrl+V) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        """
+        붙여넣기 메뉴/단축키(Ctrl+V) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유).
+
+        Note:
+            OS 클립보드에 이미지가 있으면(스크린샷을 찍고 바로 Ctrl+V 하는
+            흔한 흐름) 그 이미지를 붙여넣는다 — 이 앱 안에서 복사한 블록
+            (내부 클립보드)보다 우선한다. 둘 다 없으면 지금까지처럼 내부
+            클립보드의 블록을 붙여넣는다.
+        """
         if self._is_editing_text():
+            return
+        if self._paste_image_from_clipboard():
             return
         pasted = self._scene.paste_blocks()
         if pasted:
             self.statusBar().showMessage(f"{len(pasted)}개 블록을 붙여넣었습니다", 2000)
         self._update_edit_menu_state()
+
+    def _paste_image_from_clipboard(self) -> bool:
+        """OS 클립보드에 이미지가 있으면 화면 중앙에 이미지 블록으로 붙여넣는다."""
+        image = QApplication.clipboard().image()
+        if image.isNull():
+            return False
+
+        visible_center = self._view.mapToScene(self._view.viewport().rect().center())
+        block = self._scene.create_image_block_from_pixmap(visible_center, QPixmap.fromImage(image))
+        if block is None:
+            return False
+
+        self._scene.clearSelection()
+        block.setSelected(True)
+        self.statusBar().showMessage("클립보드 이미지를 붙여넣었습니다", 2000)
+        self._update_edit_menu_state()
+        return True
 
     def _on_duplicate(self) -> None:
         """복제 메뉴/단축키(Ctrl+D) 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
@@ -401,7 +428,7 @@ class MainWindow(QMainWindow):
             any(isinstance(item, BaseBlock) for item in self._scene.items())
         )
         self._copy_action.setEnabled(bool(self._scene.selectedItems()))
-        self._paste_action.setEnabled(self._scene.can_paste())
+        self._paste_action.setEnabled(self._scene.can_paste() or not QApplication.clipboard().image().isNull())
         selected_blocks = [item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)]
         selected_block_count = len(selected_blocks)
         self._duplicate_action.setEnabled(selected_block_count >= 1)

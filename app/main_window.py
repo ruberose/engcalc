@@ -15,9 +15,9 @@ from typing import Any
 from PySide6.QtCore import QMarginsF, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPageLayout, QPageSize
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMenu, QMessageBox
+from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMessageBox
 
-from app.settings import add_recent_file, autosave_file_path, get_recent_files
+from app.settings import add_recent_file, autosave_file_path, clear_recent_files, get_recent_files
 from blocks.base_block import BaseBlock
 from blocks.image_block import SUPPORTED_EXTENSIONS
 from blocks.math_block import MathBlock
@@ -177,13 +177,7 @@ class MainWindow(QMainWindow):
         block.setSelected(True)
 
     def _create_menu_bar(self) -> None:
-        """
-        상단 메뉴바를 구성한다.
-
-        Note:
-            편집/보기/도움말은 아직 구현 전이라(Undo 등은 1차 범위 밖) 빈 채로 두면
-            "고장난 것"처럼 보이므로 비활성화된 안내 항목을 넣어둔다.
-        """
+        """상단 메뉴바를 구성한다."""
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("파일(&F)")
 
@@ -286,11 +280,6 @@ class MainWindow(QMainWindow):
         help_action = help_menu.addAction("EngCalc 사용법(&U)...")
         help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
         help_action.triggered.connect(self._on_show_help)
-
-    def _add_placeholder(self, menu: QMenu) -> None:
-        """메뉴에 "(구현 예정)" 비활성 항목을 하나 추가한다."""
-        placeholder = menu.addAction("(구현 예정)")
-        placeholder.setEnabled(False)
 
     # --- 편집: 실행취소 / 다시실행 / 복사 / 붙여넣기 ---
 
@@ -662,12 +651,17 @@ class MainWindow(QMainWindow):
         recent = get_recent_files()
 
         if not recent:
-            self._add_placeholder(self._recent_files_menu)
+            empty_placeholder = self._recent_files_menu.addAction("(최근 파일 없음)")
+            empty_placeholder.setEnabled(False)
             return
 
         for file_path in recent:
             action = self._recent_files_menu.addAction(file_path)
             action.triggered.connect(lambda checked=False, path=file_path: self._open_recent_file(path))
+
+        self._recent_files_menu.addSeparator()
+        clear_action = self._recent_files_menu.addAction("최근 파일 지우기")
+        clear_action.triggered.connect(self._on_clear_recent_files)
 
     def _open_recent_file(self, file_path: str) -> None:
         """"최근 파일" 메뉴에서 항목을 선택했을 때 그 파일을 연다."""
@@ -677,6 +671,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "파일 없음", f"파일을 찾을 수 없습니다:\n{file_path}")
             return
         self._load_from_path(file_path)
+
+    def _on_clear_recent_files(self) -> None:
+        """"최근 파일 지우기"를 누르면 목록을 비우고 메뉴를 빈 상태로 다시 그린다."""
+        clear_recent_files()
+        self._rebuild_recent_files_menu()
+        self.statusBar().showMessage("최근 파일 목록을 지웠습니다", 3000)
 
     # --- 이미지 삽입 ---
 

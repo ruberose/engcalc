@@ -15,6 +15,7 @@ import gc
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app.main_window import MainWindow
@@ -326,3 +327,103 @@ def test_unit_editor_accepting_suggestion_replaces_whole_text(window):
 
     assert editor.toPlainText() == chosen
     block.finish_unit_editing()
+
+
+# --- 실제 키보드/마우스 이벤트 라우팅으로 검증 (사용성 버그 재현용) ---
+#
+# 사용자 피드백: "Mpa 를 치려고 m 을 누르면 자동완성이 뜨는데, p를 추가적으로
+# 입력 못하네. 그리고... 바탕화면을 누르면 보통 자동완성이 없어지는데...
+# esc키도 안먹어."
+#
+# 원인: Qt.WindowType.Popup으로 띄운 팝업이 뜨자마자 QApplication의
+# "activePopupWidget"이 되어 그 뒤의 OS 키보드 입력을 전부 가로채 버렸다 —
+# editor.keyPressEvent()를 직접 호출하는 테스트(위의 다른 테스트들)는 Qt의
+# 실제 이벤트 라우팅을 거치지 않아서 이 문제를 못 잡았다. 그래서 여기서는
+# QTest.keyClicks/mouseClick으로 DocumentView의 진짜 뷰포트에 이벤트를 보내서,
+# Qt가 포커스 있는 QGraphicsItem까지 실제로 라우팅하는 경로를 그대로 탄다.
+# 수정: Qt.WindowType.ToolTip으로 바꿔서 입력 가로채기(grab) 자체를 없앴다.
+
+
+def test_can_keep_typing_after_popup_appears(window):
+    """
+    팝업이 뜬 뒤에도 계속 타이핑할 수 있어야 한다(예: "MPa"를 치려면 "M" 다음
+    "P", "a"도 편집창에 그대로 들어가야 한다).
+    """
+    block = MathBlock(position=(0, 0))
+    window._scene.addItem(block)
+    block.start_editing()
+    _app.processEvents()
+    editor: _InlineTextEditor = block._editor
+
+    QTest.keyClicks(window._view.viewport(), "f=200m")
+    _app.processEvents()
+    assert editor._suggestions.isVisible()
+    assert QApplication.activePopupWidget() is None  # 입력을 가로채는 grab이 없어야 함
+
+    QTest.keyClicks(window._view.viewport(), "pa")
+    _app.processEvents()
+
+    assert editor.toPlainText() == "f=200mpa"
+
+
+def test_clicking_elsewhere_on_canvas_dismisses_popup_and_finishes_edit(window):
+    """자동완성 팝업이 뜬 상태에서 캔버스 빈 곳을 클릭하면, 팝업도 닫히고 편집도 정상 종료되어야 한다."""
+    block = MathBlock(position=(0, 0))
+    window._scene.addItem(block)
+    block.start_editing()
+    _app.processEvents()
+    editor: _InlineTextEditor = block._editor
+
+    QTest.keyClicks(window._view.viewport(), "f=200k")
+    _app.processEvents()
+    assert editor._suggestions.isVisible()
+
+    empty_pos = window._view.mapFromScene(window._view.mapToScene(600, 400))
+    QTest.mouseClick(window._view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, empty_pos)
+    _app.processEvents()
+
+    assert not editor._suggestions.isVisible()
+    assert block._editor is None  # 편집이 정상적으로 끝났어야 함
+    assert block.input_text() == "f=200k"
+
+
+def test_escape_via_real_keyclick_hides_popup_but_keeps_editing(window):
+    """실제 키 입력 경로로도 Esc가 팝업만 닫고 편집은 계속 유지해야 한다."""
+    block = MathBlock(position=(0, 0))
+    window._scene.addItem(block)
+    block.start_editing()
+    _app.processEvents()
+    editor: _InlineTextEditor = block._editor
+
+    QTest.keyClicks(window._view.viewport(), "f=200k")
+    _app.processEvents()
+    assert editor._suggestions.isVisible()
+
+    QTest.keyClick(window._view.viewport(), Qt.Key.Key_Escape)
+    _app.processEvents()
+
+    assert not editor._suggestions.isVisible()
+    assert block._editor is editor  # 편집은 계속 유지되어야 함
+    assert editor.toPlainText() == "f=200k"
+
+
+def test_clicking_a_suggestion_item_accepts_it(window):
+    """팝업의 후보 항목을 마우스로 직접 클릭해도 그 후보로 확정되어야 한다."""
+    block = MathBlock(position=(0, 0))
+    window._scene.addItem(block)
+    block.start_editing()
+    _app.processEvents()
+    editor: _InlineTextEditor = block._editor
+
+    QTest.keyClicks(window._view.viewport(), "f=200k")
+    _app.processEvents()
+    popup = editor._suggestions
+    assert popup.isVisible()
+
+    target_row = next(i for i in range(popup.count()) if popup.item(i).text() == "kN")
+    click_pos = popup.visualItemRect(popup.item(target_row)).center()
+    QTest.mouseClick(popup.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, click_pos)
+    _app.processEvents()
+
+    assert editor.toPlainText() == "f=200kN"
+    assert not popup.isVisible()

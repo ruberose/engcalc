@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QMarginsF, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence, QPageLayout, QPageSize
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QPageLayout, QPageSize
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMenu, QMessageBox
 
@@ -231,6 +231,28 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        align_menu = edit_menu.addMenu("정렬(&L)")
+        self._align_actions: list[QAction] = []
+        for label, mode in (
+            ("왼쪽 맞춤", "left"),
+            ("가운데 맞춤", "center_h"),
+            ("오른쪽 맞춤", "right"),
+        ):
+            action = align_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, m=mode: self._on_align(m))
+            self._align_actions.append(action)
+        align_menu.addSeparator()
+        for label, mode in (
+            ("위쪽 맞춤", "top"),
+            ("중간 맞춤", "center_v"),
+            ("아래쪽 맞춤", "bottom"),
+        ):
+            action = align_menu.addAction(label)
+            action.triggered.connect(lambda checked=False, m=mode: self._on_align(m))
+            self._align_actions.append(action)
+
+        edit_menu.addSeparator()
+
         find_action = edit_menu.addAction("찾기(&F)...")
         find_action.setShortcut(QKeySequence.StandardKey.Find)
         find_action.triggered.connect(self._on_show_find)
@@ -310,12 +332,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"{len(pasted)}개 블록을 붙여넣었습니다", 2000)
         self._update_edit_menu_state()
 
+    def _on_align(self, mode: str) -> None:
+        """정렬 메뉴 항목 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        self._scene.align_selected_blocks(mode)
+
     def _update_edit_menu_state(self) -> None:
         """편집 메뉴가 열릴 때마다(aboutToShow) 각 항목의 활성/비활성 상태를 갱신한다."""
         self._undo_action.setEnabled(self._scene.can_undo())
         self._redo_action.setEnabled(self._scene.can_redo())
         self._copy_action.setEnabled(bool(self._scene.selectedItems()))
         self._paste_action.setEnabled(self._scene.can_paste())
+        # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
+        selected_block_count = len([item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)])
+        for action in self._align_actions:
+            action.setEnabled(selected_block_count >= 2)
 
     # --- 수정 감지 / 창 제목 ---
 

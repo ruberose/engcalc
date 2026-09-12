@@ -30,6 +30,9 @@ MAX_UNDO_STEPS = 50
 #: 붙여넣은 블록을 원본과 겹치지 않게 어긋나게 놓는 거리(px).
 _PASTE_OFFSET = 20.0
 
+#: align_selected_blocks()가 받는 유효한 정렬 기준 값.
+_ALIGN_MODES = frozenset({"left", "right", "top", "bottom", "center_h", "center_v"})
+
 #: "용지 기반" 문서 형식에서 고를 수 있는 용지 크기(mm). 나중에 다른 용지를
 #: 추가할 땐 이 딕셔너리에 항목만 더하면 된다(다른 코드는 안 바꿔도 됨).
 PAPER_SIZES_MM: dict[str, tuple[float, float]] = {"A4": (210.0, 297.0)}
@@ -435,6 +438,64 @@ class DocumentScene(QGraphicsScene):
             self.commit_undo_snapshot(before)
             self.recalculate_all()
         return pasted
+
+    # --- 정렬 ---
+
+    def align_selected_blocks(self, mode: str) -> None:
+        """
+        선택된 블록 2개 이상을 한 기준선에 맞춰 정렬한다.
+
+        Args:
+            mode: "left"/"right"/"top"/"bottom"(가장자리 맞춤) 또는
+                "center_h"/"center_v"(가운데/중간 맞춤). 그 외 값이거나
+                선택된 블록이 2개 미만이면 아무 것도 하지 않는다.
+
+        Note:
+            기준은 항상 "선택된 블록들 전체를 감싸는 사각형"이다 — 예를 들어
+            "left"는 그 사각형의 가장 왼쪽 x좌표에 모든 블록의 왼쪽 변을
+            맞춘다. 어느 한 블록을 따로 "기준"으로 고르게 하지 않는 쪽이
+            (디자인 툴에서 흔한 관례이기도 하고) 훨씬 단순하다. 정렬로 블록의
+            위아래 순서가 바뀔 수 있으므로("계산 순서" 규칙) 끝나면 다시
+            계산한다.
+        """
+        blocks = [item for item in self.selectedItems() if isinstance(item, BaseBlock)]
+        if len(blocks) < 2 or mode not in _ALIGN_MODES:
+            return
+
+        geometry = {block: (block.pos(), block.boundingRect()) for block in blocks}
+        lefts = [pos.x() for pos, _rect in geometry.values()]
+        rights = [pos.x() + rect.width() for pos, rect in geometry.values()]
+        tops = [pos.y() for pos, _rect in geometry.values()]
+        bottoms = [pos.y() + rect.height() for pos, rect in geometry.values()]
+
+        before = self.capture_undo_snapshot()
+        if mode == "left":
+            target = min(lefts)
+            for block, (pos, _rect) in geometry.items():
+                block.setPos(target, pos.y())
+        elif mode == "right":
+            target = max(rights)
+            for block, (pos, rect) in geometry.items():
+                block.setPos(target - rect.width(), pos.y())
+        elif mode == "center_h":
+            target = (min(lefts) + max(rights)) / 2
+            for block, (pos, rect) in geometry.items():
+                block.setPos(target - rect.width() / 2, pos.y())
+        elif mode == "top":
+            target = min(tops)
+            for block, (pos, _rect) in geometry.items():
+                block.setPos(pos.x(), target)
+        elif mode == "bottom":
+            target = max(bottoms)
+            for block, (pos, rect) in geometry.items():
+                block.setPos(pos.x(), target - rect.height())
+        elif mode == "center_v":
+            target = (min(tops) + max(bottoms)) / 2
+            for block, (pos, rect) in geometry.items():
+                block.setPos(pos.x(), target - rect.height() / 2)
+
+        self.commit_undo_snapshot(before)
+        self.recalculate_all()
 
     def recalculate_all(self) -> None:
         """

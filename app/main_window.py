@@ -24,6 +24,7 @@ from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
 from file_io.pdf_exporter import export_to_pdf
+from ui.find_dialog import FindDialog
 from ui.help_dialog import HelpDialog
 from ui.property_panel import PropertyPanel
 from ui.variable_inspector import VariableInspector
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         self._is_modified: bool = False
         self._recovered_from_autosave: bool = False  # 복구된 내용이면 "수정됨" 표시를 지우면 안 됨
         self._help_dialog: HelpDialog | None = None  # 도움말 창은 처음 열 때 한 번만 만든다
+        self._find_dialog: FindDialog | None = None  # 찾기 창도 처음 열 때 한 번만 만든다
 
         # 메뉴의 "이미지 삽입"/"열기" 등이 self._scene/self._view를 참조하므로
         # 캔버스를 먼저 만들어야 한다. 사이드 패널(속성/변수 목록)도 씬이 있어야
@@ -220,6 +222,12 @@ class MainWindow(QMainWindow):
         self._paste_action = edit_menu.addAction("붙여넣기(&P)")
         self._paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         self._paste_action.triggered.connect(self._on_paste)
+
+        edit_menu.addSeparator()
+
+        find_action = edit_menu.addAction("찾기(&F)...")
+        find_action.setShortcut(QKeySequence.StandardKey.Find)
+        find_action.triggered.connect(self._on_show_find)
 
         edit_menu.aboutToShow.connect(self._update_edit_menu_state)
         self._update_edit_menu_state()
@@ -612,6 +620,24 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
         else:
             QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 PDF를 만들지 않았습니다.")
+
+    # --- 찾기 ---
+
+    def _on_show_find(self) -> None:
+        """
+        찾기 대화상자를 연다 (메뉴 > 편집 > 찾기, Ctrl+F).
+
+        Note:
+            처음 열 때만 만들고 이후에는 재사용한다(도움말 창과 같은 패턴).
+            열 때마다 검색창에 포커스를 주고 기존 텍스트를 전체 선택해서,
+            바로 새 검색어를 입력할 수 있게 한다.
+        """
+        if self._find_dialog is None:
+            self._find_dialog = FindDialog(self._scene, self._view, self)
+        self._find_dialog.show()
+        self._find_dialog.raise_()
+        self._find_dialog.activateWindow()
+        self._find_dialog.focus_input()
 
     # --- 도움말 ---
 

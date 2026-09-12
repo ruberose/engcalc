@@ -333,3 +333,40 @@ class DocumentScene(QGraphicsScene):
     def block_for_variable(self, name: str) -> MathBlock | None:
         """주어진 이름의 변수를 정의한 MathBlock을 반환한다. 없으면 None."""
         return self._variable_blocks.get(name)
+
+    # --- 찾기 ---
+
+    def find_blocks(self, query: str) -> list[BaseBlock]:
+        """
+        검색어가 내용에 포함된 블록들을 화면 순서(위→아래, 왼→오른)로 찾는다.
+
+        Args:
+            query: 찾을 문자열. 대소문자는 구분하지 않는다. 빈 문자열이면 빈 리스트를 돌려준다.
+
+        Note:
+            수식 블록은 입력 원문(예: "F_y = 300"), 텍스트 블록은 내용, 이미지
+            블록은 캡션을 검색 대상으로 삼는다 — 계산 결과값 자체는 검색하지
+            않는다(결과는 입력에서 파생된 값이라, 입력을 찾는 게 더 직접적이다).
+        """
+        query = query.strip()
+        if not query:
+            return []
+        query_lower = query.lower()
+        matches = [
+            item
+            for item in self.items()
+            if isinstance(item, BaseBlock) and query_lower in _searchable_text(item).lower()
+        ]
+        matches.sort(key=lambda block: (block.pos().y(), block.pos().x()))
+        return matches
+
+
+def _searchable_text(block: BaseBlock) -> str:
+    """블록 종류별로 찾기 대상이 되는 텍스트를 뽑아낸다."""
+    if isinstance(block, MathBlock):
+        return block.input_text()
+    if isinstance(block, TextBlock):
+        return block.text()
+    if isinstance(block, ImageBlock):
+        return block.caption()
+    return ""

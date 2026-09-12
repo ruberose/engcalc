@@ -13,7 +13,17 @@ docs/사용법.txt(더 자세한 텍스트 버전)의 요약판이라고 보면 
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QPushButton, QTabWidget, QTextBrowser, QVBoxLayout
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor, QTextDocument
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+)
 
 _BASIC_USAGE_HTML = """
 <h2>기본 사용법</h2>
@@ -49,6 +59,15 @@ _BASIC_USAGE_HTML = """
 <tr><td><code>Ctrl+V</code></td><td>붙여넣기 (원본에서 살짝 어긋난 위치에)</td></tr>
 </table>
 <p>블록을 편집(타이핑) 중일 때는 이 단축키들이 편집기 자체의 텍스트 실행취소/복사/붙여넣기로 쓰입니다.</p>
+
+<h3>찾기</h3>
+<p><code>Ctrl+F</code> (또는 메뉴 &gt; 편집 &gt; 찾기)로 검색어를 입력하면, 수식 블록의 입력
+원문·텍스트 블록 내용·이미지 캡션에서 찾아 화면 위→아래 순서로 첫 결과를 선택하고 그
+위치로 이동시킵니다. "다음"/"이전"(또는 Enter)으로 결과를 넘나들 수 있고, 마지막
+결과에서 다시 처음으로 돌아갑니다(원형 검색). 계산 결과값이 아니라 입력한 원문 기준입니다.</p>
+<p>이 도움말 창에도 맨 위에 따로 찾기 검색창이 있습니다(<code>Ctrl+F</code>로 포커스 이동) —
+지금 보고 있는 탭의 텍스트 안에서 찾아 하이라이트해줍니다. 메인 창과는 별개의 창이라
+찾기 기능도 서로 독립적으로 동작합니다.</p>
 
 <h3>파일 / PDF</h3>
 <table cellspacing="6">
@@ -165,6 +184,13 @@ class HelpDialog(QDialog):
     Note:
         모달로 띄우면 이 창을 보면서 동시에 캔버스에 타이핑할 수 없어 불편하므로,
         비모달(show())로 열어서 작업 중에도 계속 참고할 수 있게 한다.
+
+        메인 창의 찾기(Ctrl+F, ui/find_dialog.py)는 이 창과는 완전히 별개다 —
+        이 대화상자는 메인 창과 다른 "최상위 창"이라, 메인 창의 Ctrl+F 단축키는
+        이 창에 포커스가 있을 때 동작하지 않는다(Qt의 단축키는 기본적으로
+        "지금 활성화된 창" 기준으로 걸린다). 그래서 이 창 자체에 검색창과
+        Ctrl+F 단축키를 따로 둔다 — 여기서는 지금 보이는 탭의 텍스트 안에서
+        찾아 하이라이트한다(QTextBrowser에 내장된 find() 기능 사용).
     """
 
     def __init__(self, parent=None) -> None:
@@ -172,16 +198,37 @@ class HelpDialog(QDialog):
         self.setWindowTitle("EngCalc 사용법")
         self.resize(640, 720)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._make_page(_BASIC_USAGE_HTML), "기본 사용법")
-        tabs.addTab(self._make_page(_FORMULA_SYNTAX_HTML), "수식 작성법")
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._make_page(_BASIC_USAGE_HTML), "기본 사용법")
+        self._tabs.addTab(self._make_page(_FORMULA_SYNTAX_HTML), "수식 작성법")
+
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText("찾기 (Ctrl+F) — 지금 보이는 탭 안에서 검색")
+        self._search_input.textChanged.connect(self._on_search_text_changed)
+        self._search_input.returnPressed.connect(self.find_next)
+
+        self._search_status = QLabel("")
+
+        prev_button = QPushButton("이전")
+        prev_button.clicked.connect(self.find_previous)
+        next_button = QPushButton("다음")
+        next_button.clicked.connect(self.find_next)
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(self._search_input)
+        search_row.addWidget(self._search_status)
+        search_row.addWidget(prev_button)
+        search_row.addWidget(next_button)
 
         close_button = QPushButton("닫기")
         close_button.clicked.connect(self.close)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(tabs)
+        layout.addLayout(search_row)
+        layout.addWidget(self._tabs)
         layout.addWidget(close_button, alignment=Qt.AlignmentFlag.AlignRight)
+
+        QShortcut(QKeySequence.StandardKey.Find, self, activated=self._focus_search)
 
     @staticmethod
     def _make_page(html: str) -> QTextBrowser:
@@ -190,3 +237,51 @@ class HelpDialog(QDialog):
         browser.setOpenExternalLinks(False)
         browser.setHtml(html)
         return browser
+
+    # --- 찾기 (지금 보이는 탭의 텍스트 안에서) ---
+
+    def _focus_search(self) -> None:
+        """검색창에 포커스를 주고 기존 텍스트를 전체 선택한다."""
+        self._search_input.setFocus()
+        self._search_input.selectAll()
+
+    def find_next(self) -> None:
+        """다음 검색 결과로 이동한다."""
+        self._search_in_active_tab(backward=False)
+
+    def find_previous(self) -> None:
+        """이전 검색 결과로 이동한다."""
+        self._search_in_active_tab(backward=True)
+
+    def _on_search_text_changed(self, text: str) -> None:
+        """타이핑할 때마다, 지금 탭의 커서를 맨 앞으로 되돌리고 처음부터 다시 찾는다."""
+        browser = self._tabs.currentWidget()
+        cursor = browser.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        cursor.clearSelection()
+        browser.setTextCursor(cursor)
+
+        if text.strip():
+            self._search_in_active_tab(backward=False)
+        else:
+            self._search_status.setText("")
+
+    def _search_in_active_tab(self, backward: bool) -> None:
+        """지금 보이는 탭의 QTextBrowser 안에서 검색어를 찾아 하이라이트한다 (없으면 처음/끝부터 한 번 더)."""
+        query = self._search_input.text()
+        if not query.strip():
+            return
+
+        browser = self._tabs.currentWidget()
+        flags = QTextDocument.FindFlag.FindBackward if backward else QTextDocument.FindFlag(0)
+
+        found = browser.find(query, flags)
+        if not found:
+            # 문서 끝(또는 처음)에 닿아서 못 찾았을 수 있으니, 반대쪽 끝으로 커서를
+            # 옮기고 한 번 더 찾아본다 (원형 검색처럼 동작하게 함).
+            cursor = browser.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start)
+            browser.setTextCursor(cursor)
+            found = browser.find(query, flags)
+
+        self._search_status.setText("" if found else "검색 결과 없음")

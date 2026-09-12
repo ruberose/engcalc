@@ -63,6 +63,20 @@ def test_basic_usage_tab_has_content():
     dialog.close()
 
 
+def test_basic_usage_tab_documents_find_feature():
+    """
+    사용자 요청: "찾기 기능 만들자. 메인 화면에서도 작동하지만, 도움말에서도
+    작동해야돼"
+
+    찾기(Ctrl+F) 기능이 "기본 사용법" 탭에 안내되어 있는지 확인한다.
+    """
+    dialog = HelpDialog()
+    tabs = dialog.findChild(QTabWidget)
+    basic_text = tabs.widget(0).toPlainText()
+    assert "Ctrl+F" in basic_text
+    dialog.close()
+
+
 def test_basic_usage_tab_documents_autosave():
     """
     사용자 요청: "제일 먼저 만들어야 하는 자동저장기능을 만들어보자"

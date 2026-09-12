@@ -1,10 +1,12 @@
 """canvas/document_scene.py의 to_blocks_list()/load_blocks_list() 왕복 테스트."""
 
+from PySide6.QtCore import QPointF
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from blocks.image_block import ImageBlock
 from blocks.math_block import MathBlock
+from blocks.table_block import TableBlock
 from blocks.text_block import TextBlock
 from canvas.document_scene import DocumentScene
 
@@ -101,6 +103,24 @@ def test_load_blocks_list_skips_block_missing_required_field():
     scene.load_blocks_list(blocks_data)  # 예외 없이 끝나야 함
     assert len(scene.items()) == 1
     assert scene.items()[0]._text == "정상"
+
+
+def test_table_block_round_trips_through_scene():
+    """표 블록도 다른 블록들처럼 씬을 거쳐 저장/복원되어야 한다."""
+    scene = DocumentScene()
+    table = scene.create_table_block(QPointF(0, 0), rows=2, cols=2)
+    table.set_cell_text(0, 0, "부재")
+    table.set_cell_text(0, 1, "단면적")
+
+    blocks_data = scene.to_blocks_list()
+    restored_scene = DocumentScene()
+    restored_scene.load_blocks_list(blocks_data)
+
+    restored_table = [i for i in restored_scene.items() if isinstance(i, TableBlock)][0]
+    assert restored_table.row_count() == 2
+    assert restored_table.col_count() == 2
+    assert restored_table.cell_text(0, 0) == "부재"
+    assert restored_table.cell_text(0, 1) == "단면적"
 
 
 def test_math_block_preferred_display_unit_round_trips():

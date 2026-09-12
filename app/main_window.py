@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
         insert_image_action = file_menu.addAction("이미지 삽입(&I)...")
         insert_image_action.triggered.connect(self._on_insert_image)
 
+        insert_table_action = file_menu.addAction("표 삽입(&B)")
+        insert_table_action.triggered.connect(self._on_insert_table)
+
         file_menu.addSeparator()
         document_properties_action = file_menu.addAction("문서 속성(&D)...")
         document_properties_action.triggered.connect(self._on_document_properties)
@@ -870,6 +873,11 @@ class MainWindow(QMainWindow):
         block = self._scene.create_image_block_from_file(visible_center, file_path)
         if block is None:
             self.statusBar().showMessage(f"이미지를 불러올 수 없습니다: {file_path}", 5000)
+
+    def _on_insert_table(self) -> None:
+        """현재 화면에 보이는 캔버스 영역의 중앙에 기본 크기(3행 3열) 표를 삽입한다."""
+        visible_center = self._view.mapToScene(self._view.viewport().rect().center())
+        self._scene.create_table_block(visible_center)
 
     # --- 문서 속성 ---
 

@@ -50,3 +50,33 @@ def test_trailing_equals_does_not_break_comparison_operators():
     for text in ["a >=", "a <=", "a =="]:
         result = parse_input(text)
         assert result.expression_text == text, f"{text!r} 이 잘못 잘렸음: {result.expression_text!r}"
+
+
+def test_single_parameter_function_definition():
+    """'f(x) = 본문' 형태는 함수 이름/매개변수/본문으로 나뉘어야 한다."""
+    result = parse_input("f(x) = x^2 + 1")
+    assert result.variable_name == "f"
+    assert result.function_params == ["x"]
+    assert result.expression_text == "x^2 + 1"
+
+
+def test_multi_parameter_function_definition():
+    """매개변수가 여러 개면(쉼표로 구분) 목록으로 순서대로 담겨야 한다."""
+    result = parse_input("g(x, y) = x*y + 1")
+    assert result.variable_name == "g"
+    assert result.function_params == ["x", "y"]
+    assert result.expression_text == "x*y + 1"
+
+
+def test_plain_assignment_has_no_function_params():
+    """일반 변수 대입/수식은 function_params가 None이어야 한다."""
+    assert parse_input("a = 100").function_params is None
+    assert parse_input("a * sin(30)").function_params is None
+
+
+def test_function_call_without_equals_is_not_a_definition():
+    """'f(5)'처럼 '='가 없는 호출은 함수 정의가 아니라 그냥 수식으로 남아야 한다."""
+    result = parse_input("f(5)")
+    assert result.function_params is None
+    assert result.variable_name is None
+    assert result.expression_text == "f(5)"

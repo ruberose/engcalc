@@ -100,6 +100,20 @@ def test_division_by_zero_with_units_is_an_error():
     assert result.is_error
 
 
+def test_calling_undefined_name_as_function_is_reported_as_error():
+    """
+    정의된 적 없는 이름을 함수처럼(괄호와 함께) 부르면 에러여야 한다.
+
+    SymPy 파서는 이런 호출을 예외 없이 "정의되지 않은 함수 호출" 심볼로
+    조용히 만들어버리는데, 그대로 두면 함수 이름 오타가 에러 표시 없이
+    결과처럼 보이는 위험한 상태가 된다 — 괄호 없는 정의되지 않은 변수와
+    똑같이 취급해야 한다.
+    """
+    scope = Scope()
+    result = evaluate("totallyUndefinedFunc(5)", scope)
+    assert result.is_error
+
+
 def test_normal_division_with_units_still_works():
     """0으로 나누기 방지 로직을 추가해도, 정상적인 단위 나눗셈은 그대로 동작해야 한다."""
     scope = Scope()

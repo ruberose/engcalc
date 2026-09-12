@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from blocks.base_block import BaseBlock
 from blocks.image_block import ImageBlock
 from blocks.math_block import MathBlock
+from blocks.table_block import TableBlock
 from blocks.text_block import TextBlock
 
 #: BLOCK_TYPE 문자열 -> 패널에 보여줄 한글 이름.
@@ -27,7 +28,10 @@ _TYPE_NAMES = {
     TextBlock.BLOCK_TYPE: "텍스트 블록",
     MathBlock.BLOCK_TYPE: "수식 블록",
     ImageBlock.BLOCK_TYPE: "이미지 블록",
+    TableBlock.BLOCK_TYPE: "표 블록",
 }
+
+_TABLE_SIZE_RANGE = (1, 50)
 
 _POSITION_RANGE = 100_000.0
 _SIZE_RANGE = 100_000.0
@@ -61,6 +65,8 @@ class PropertyPanel(QWidget):
         self._unit_edit = QLineEdit()
         self._unit_edit.setPlaceholderText("예: MPa (비우면 자동 정리된 단위)")
         self._decimal_places_spin = self._make_decimal_places_spin()
+        self._rows_spin = self._make_table_size_spin()
+        self._cols_spin = self._make_table_size_spin()
 
         self._form = QFormLayout()
         self._form.addRow("종류", self._type_label)
@@ -72,6 +78,8 @@ class PropertyPanel(QWidget):
         self._form.addRow("글자 크기", self._font_size_spin)
         self._form.addRow("표시 단위", self._unit_edit)
         self._form.addRow("표시 자릿수", self._decimal_places_spin)
+        self._form.addRow("행 수", self._rows_spin)
+        self._form.addRow("열 수", self._cols_spin)
 
         layout = QVBoxLayout(self)
         layout.addLayout(self._form)
@@ -85,6 +93,8 @@ class PropertyPanel(QWidget):
         self._font_size_spin.valueChanged.connect(self._on_font_size_changed)
         self._unit_edit.editingFinished.connect(self._on_unit_changed)
         self._decimal_places_spin.valueChanged.connect(self._on_decimal_places_changed)
+        self._rows_spin.valueChanged.connect(self._on_row_count_changed)
+        self._cols_spin.valueChanged.connect(self._on_col_count_changed)
 
         self.show_block(None)
 
@@ -117,6 +127,13 @@ class PropertyPanel(QWidget):
         spin.setSpecialValueText("자동")
         return spin
 
+    @staticmethod
+    def _make_table_size_spin() -> QSpinBox:
+        """표 블록의 행/열 수 조절용 정수 스핀박스."""
+        spin = QSpinBox()
+        spin.setRange(*_TABLE_SIZE_RANGE)
+        return spin
+
     # --- 공개 API ---
 
     def show_block(self, block: BaseBlock | None) -> None:
@@ -140,7 +157,18 @@ class PropertyPanel(QWidget):
 
         if block is None:
             self._type_label.setText("(선택된 블록 없음)")
-            for widget in (self._x_spin, self._y_spin, self._width_spin, self._height_spin, self._bold_check, self._font_size_spin, self._unit_edit, self._decimal_places_spin):
+            for widget in (
+                self._x_spin,
+                self._y_spin,
+                self._width_spin,
+                self._height_spin,
+                self._bold_check,
+                self._font_size_spin,
+                self._unit_edit,
+                self._decimal_places_spin,
+                self._rows_spin,
+                self._cols_spin,
+            ):
                 self._form.setRowVisible(widget, False)
             return
 
@@ -160,15 +188,16 @@ class PropertyPanel(QWidget):
 
         is_text = isinstance(block, TextBlock)
         is_math = isinstance(block, MathBlock)
+        is_table = isinstance(block, TableBlock)
 
         # 굵게는 텍스트 블록만 지원한다(수식은 mathtext 렌더링이라 별도 지원 없음).
         self._form.setRowVisible(self._bold_check, is_text)
         if is_text:
             self._bold_check.setChecked(block.is_bold())
 
-        # 글자 크기는 텍스트/수식 블록 둘 다 지원한다.
-        self._form.setRowVisible(self._font_size_spin, is_text or is_math)
-        if is_text or is_math:
+        # 글자 크기는 텍스트/수식/표 블록 모두 지원한다.
+        self._form.setRowVisible(self._font_size_spin, is_text or is_math or is_table)
+        if is_text or is_math or is_table:
             self._font_size_spin.setValue(block.font_size())
 
         self._form.setRowVisible(self._unit_edit, is_math)
@@ -178,6 +207,12 @@ class PropertyPanel(QWidget):
         self._form.setRowVisible(self._decimal_places_spin, is_math)
         if is_math:
             self._decimal_places_spin.setValue(block.decimal_places())
+
+        self._form.setRowVisible(self._rows_spin, is_table)
+        self._form.setRowVisible(self._cols_spin, is_table)
+        if is_table:
+            self._rows_spin.setValue(block.row_count())
+            self._cols_spin.setValue(block.col_count())
 
     # --- 내부: 화면 -> 블록 ---
 
@@ -226,7 +261,7 @@ class PropertyPanel(QWidget):
         self._apply_with_undo(lambda: self._block.set_bold(checked))
 
     def _on_font_size_changed(self, _value: float) -> None:
-        if self._updating or not isinstance(self._block, (TextBlock, MathBlock)):
+        if self._updating or not isinstance(self._block, (TextBlock, MathBlock, TableBlock)):
             return
         self._apply_with_undo(lambda: self._block.set_font_size(int(self._font_size_spin.value())))
 
@@ -240,3 +275,13 @@ class PropertyPanel(QWidget):
             return
         places = value if value >= 0 else None
         self._apply_with_undo(lambda: self._block.set_decimal_places(places))
+
+    def _on_row_count_changed(self, value: int) -> None:
+        if self._updating or not isinstance(self._block, TableBlock):
+            return
+        self._apply_with_undo(lambda: self._block.set_row_count(value))
+
+    def _on_col_count_changed(self, value: int) -> None:
+        if self._updating or not isinstance(self._block, TableBlock):
+            return
+        self._apply_with_undo(lambda: self._block.set_col_count(value))

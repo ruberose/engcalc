@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 from blocks.base_block import BaseBlock
 from blocks.image_block import ImageBlock, load_pixmap_from_file
 from blocks.math_block import MathBlock
+from blocks.table_block import TableBlock
 from blocks.text_block import TextBlock
 from canvas.grid import BACKGROUND_COLOR, draw_grid
 from engine.scope import Scope
@@ -64,6 +65,7 @@ _BLOCK_CLASSES: dict[str, type[BaseBlock]] = {
     TextBlock.BLOCK_TYPE: TextBlock,
     MathBlock.BLOCK_TYPE: MathBlock,
     ImageBlock.BLOCK_TYPE: ImageBlock,
+    TableBlock.BLOCK_TYPE: TableBlock,
 }
 
 
@@ -319,6 +321,14 @@ class DocumentScene(QGraphicsScene):
 
         before = self.capture_undo_snapshot()
         block = ImageBlock(position=(scene_pos.x(), scene_pos.y()), pixmap=pixmap, caption=caption)
+        self.addItem(block)
+        self.commit_undo_snapshot(before)
+        return block
+
+    def create_table_block(self, scene_pos: QPointF, rows: int = 3, cols: int = 3) -> TableBlock:
+        """주어진 씬 좌표에 새 TableBlock을 만들어 캔버스에 추가한다 (메뉴 "표 삽입"이 사용)."""
+        before = self.capture_undo_snapshot()
+        block = TableBlock(position=(scene_pos.x(), scene_pos.y()), rows=rows, cols=cols)
         self.addItem(block)
         self.commit_undo_snapshot(before)
         return block
@@ -649,7 +659,7 @@ class DocumentScene(QGraphicsScene):
         blocks = [
             item
             for item in self.selectedItems()
-            if isinstance(item, (TextBlock, MathBlock)) and not item.is_locked()
+            if isinstance(item, (TextBlock, MathBlock, TableBlock)) and not item.is_locked()
         ]
         if not blocks:
             return 0
@@ -736,4 +746,8 @@ def _searchable_text(block: BaseBlock) -> str:
         return block.text()
     if isinstance(block, ImageBlock):
         return block.caption()
+    if isinstance(block, TableBlock):
+        return " ".join(
+            block.cell_text(row, col) for row in range(block.row_count()) for col in range(block.col_count())
+        )
     return ""

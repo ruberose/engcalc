@@ -21,7 +21,7 @@ from sympy.parsing.sympy_parser import (
 )
 
 from engine.functions import CONSTANTS, FUNCTIONS
-from engine.parser import parse_input
+from engine.parser import ParsedInput, parse_input
 from engine.scope import Scope
 from engine.unit_manager import Quantity, attach_units, make_quantity, simplify
 
@@ -64,6 +64,62 @@ class EvalResult:
         return self.error is not None
 
 
+class UserFunction:
+    """
+    "f(x) = x^2 + 1" 같은 사용자 정의 함수 — scope에 등록되어 "f(5)"처럼 호출된다.
+
+    정의된 시점의 scope(그 위 블록들이 채워둔 변수값)를 그대로 복사해서 갖고
+    있다가("클로저"), 실제 호출될 때마다 매개변수 자리에 인자값을 채운
+    scope로 engine.evaluator.evaluate()를 다시 돌려서 계산한다.
+
+    Note:
+        SymPy의 Lambda(심볼릭 함수)를 쓰지 않는 이유: 매개변수를 SymPy
+        심볼(Symbol)로 두고 본문에 단위 있는 값(Pint Quantity)이 섞이면(예:
+        "x + 5mm"), SymPy가 심볼과 함께 식을 만들면서 Quantity를 억지로
+        숫자로 바꾸려다 예외를 던진다(심볼과 Quantity는 SymPy 식 안에서
+        같이 있을 수 없음). 여기서는 호출 시점에 매개변수를 항상 "이미 계산된
+        구체적인 값"(숫자 또는 Quantity)으로 바로 대입해 evaluate()를 다시
+        타므로, 보통 수식 블록이 계산되는 경로와 완전히 같아서 이 문제가
+        생기지 않는다.
+    """
+
+    #: 함수가 자기 자신을(또는 서로를) 무한히 호출하는 실수를 했을 때 파이썬
+    #: RecursionError로 프로그램이 죽기 전에 먼저 걸러내기 위한 호출 깊이 제한.
+    _MAX_CALL_DEPTH = 50
+
+    def __init__(self, name: str, params: list[str], body_text: str, captured_scope: dict[str, Any]) -> None:
+        self.name = name
+        self.params = params
+        self.body_text = body_text
+        self.captured_scope = captured_scope
+        self._call_depth = 0
+
+    def __call__(self, *args: Any) -> Any:
+        if len(args) != len(self.params):
+            raise TypeError(f"{self.name}() 함수는 인자 {len(self.params)}개가 필요합니다(받은 값: {len(args)}개)")
+
+        if self._call_depth >= self._MAX_CALL_DEPTH:
+            raise RecursionError(f"{self.name}() 함수 호출이 너무 깊습니다 (재귀 호출을 확인하세요)")
+
+        call_scope = Scope()
+        for key, value in self.captured_scope.items():
+            call_scope.set(key, value)
+        for param_name, arg_value in zip(self.params, args):
+            call_scope.set(param_name, arg_value)
+
+        self._call_depth += 1
+        try:
+            result = evaluate(self.body_text, call_scope)
+        finally:
+            self._call_depth -= 1
+
+        if result.is_error:
+            raise ValueError(f"{self.name}() 함수 오류: {result.error}")
+        if result.value is None:
+            raise ValueError(f"{self.name}() 함수의 본문이 비어 있습니다")
+        return result.value
+
+
 def evaluate(text: str, scope: Scope) -> EvalResult:
     """
     수식 한 줄을 계산한다.
@@ -90,6 +146,9 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
     if any(ch in parsed.expression_text for ch in _LATEX_MARKUP_CHARS):
         return EvalResult(variable_name=parsed.variable_name, error=_LATEX_NOT_SUPPORTED_MESSAGE)
 
+    if parsed.function_params is not None:
+        return _define_function(parsed, scope)
+
     try:
         expression_text = attach_units(parsed.expression_text)
         local_dict = {**FUNCTIONS, **CONSTANTS, **_UNIT_LOCALS, **scope.as_dict()}
@@ -102,9 +161,10 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
     except Exception as exc:  # noqa: BLE001 - 위와 동일한 이유
         return EvalResult(variable_name=parsed.variable_name, error=f"계산 오류: {exc}")
 
-    if isinstance(value, sympy.Basic) and value.free_symbols:
-        names = ", ".join(sorted(str(sym) for sym in value.free_symbols))
-        return EvalResult(variable_name=parsed.variable_name, error=f"정의되지 않은 변수: {names}")
+    if isinstance(value, sympy.Basic):
+        undefined_names = _undefined_names_in(value)
+        if undefined_names:
+            return EvalResult(variable_name=parsed.variable_name, error=f"정의되지 않은 변수: {', '.join(undefined_names)}")
 
     if _is_invalid_numeric_result(value):
         return EvalResult(variable_name=parsed.variable_name, error="계산 오류: 0으로 나누거나 정의되지 않은 값입니다 (무한대/nan)")
@@ -113,6 +173,92 @@ def evaluate(text: str, scope: Scope) -> EvalResult:
         scope.set(parsed.variable_name, value)
 
     return EvalResult(value=value, variable_name=parsed.variable_name)
+
+
+def _undefined_names_in(value: sympy.Basic) -> list[str]:
+    """
+    계산 결과에 아직 남아있는 "정의되지 않은 이름"을 모두 모아 정렬해서 돌려준다.
+
+    두 가지 형태로 남을 수 있다:
+    - 자유 변수(Symbol) — 예: "b * 2"에서 b를 정의한 적이 없는 경우.
+    - 정의되지 않은 함수 호출(SymPy의 AppliedUndef) — 예를 들어 함수 이름을
+      "stres(F, A)"처럼 잘못 타이핑하면, SymPy는 에러를 내는 대신 조용히
+      "정의되지 않은 함수를 부르는 식"으로 만들어버린다(호출 문법 자체는
+      문제가 없어서). 그대로 두면 오타 난 함수 호출이 에러 없이 결과처럼
+      보이는 위험한 상태가 되므로, 자유 변수와 똑같이 잡아낸다.
+    """
+    names = {str(symbol) for symbol in value.free_symbols}
+    names |= {str(call.func) for call in value.atoms(sympy.core.function.AppliedUndef)}
+    return sorted(names)
+
+
+def _define_function(parsed: ParsedInput, scope: Scope) -> EvalResult:
+    """
+    "f(x) = x^2 + 1" 같은 함수 정의 한 줄을 처리한다.
+
+    Note:
+        가능하면 본문에서 정의되지 않은 변수를 미리 잡아내지만(_validate_function_body),
+        단위가 섞여 있으면 미리 판단할 수 없어 조용히 넘어간다 — 그런 경우는
+        UserFunction이 실제로 호출될 때 evaluate()가 대신 검증해준다.
+
+        정의 자체는 (변수 대입처럼) 화면에 따로 보여줄 값이 없으므로
+        EvalResult.value는 항상 None — MathBlock은 이미 "값이 없으면 입력
+        원문만 보여준다"는 규칙이 있어서 그대로 "f(x) = x^2 + 1"처럼 입력한
+        그대로 표시된다.
+    """
+    params = parsed.function_params
+    assert params is not None  # 이 함수를 부르는 evaluate()가 이미 확인함
+
+    undefined_names = _validate_function_body(parsed.expression_text, params, scope)
+    if undefined_names:
+        return EvalResult(variable_name=parsed.variable_name, error=f"정의되지 않은 변수: {', '.join(sorted(undefined_names))}")
+
+    function = UserFunction(
+        name=parsed.variable_name,
+        params=params,
+        body_text=parsed.expression_text,
+        captured_scope=scope.as_dict(),
+    )
+    scope.set(parsed.variable_name, function)
+    return EvalResult(variable_name=parsed.variable_name)
+
+
+def _validate_function_body(expression_text: str, params: list[str], scope: Scope) -> set[str] | None:
+    """
+    가능하면 함수 본문에서 매개변수도 아니고 이전 블록에서 정의된 것도 아닌
+    "정의되지 않은 변수"를 미리 찾아낸다.
+
+    매개변수 이름 자리에 실제 값 대신 SymPy 심볼(Symbol)을 넣어 한 번
+    파싱해보는 방식이다. 본문에 단위 있는 값(Pint Quantity)이 함께 있으면
+    (예: "x + 5mm") 심볼과 Quantity를 같은 식에 놓으려다 SymPy/Pint가
+    예외를 던지는데(심볼은 아직 "구체적인 값"이 아니라서), 이건 실제 오류가
+    아니라 "미리 판단할 수 없다"는 뜻이므로 조용히 None을 돌려주고 넘어간다
+    — 함수가 실제로 호출될 때는 매개변수 자리에 심볼이 아니라 진짜 값이
+    들어가므로 이 문제 자체가 생기지 않는다(UserFunction 참고).
+
+    Returns:
+        정의되지 않은 이름(문자열)들의 집합. 미리 판단할 수 없거나 문제가 없으면 None.
+    """
+    try:
+        param_symbols = [sympy.Symbol(name) for name in params]
+        expression_text = attach_units(expression_text)
+        local_dict = {
+            **FUNCTIONS,
+            **CONSTANTS,
+            **_UNIT_LOCALS,
+            **scope.as_dict(),
+            **dict(zip(params, param_symbols)),
+        }
+        body = parse_expr(expression_text, local_dict=local_dict, transformations=_TRANSFORMATIONS)
+    except Exception:  # noqa: BLE001 - 판단을 포기하고 호출 시점 검증에 맡기기 위해 광범위하게 잡음
+        return None
+
+    if not isinstance(body, sympy.Basic):
+        return None
+
+    param_names = {str(symbol) for symbol in param_symbols}
+    undefined_names = set(_undefined_names_in(body)) - param_names
+    return undefined_names or None
 
 
 def _finalize(raw_result: Any) -> Any:

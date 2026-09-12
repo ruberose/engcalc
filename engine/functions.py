@@ -67,6 +67,55 @@ def _nth_root(x: Any, n: Any) -> Any:
     return sympy.root(x, n)
 
 
+# --- 목록(리스트) 집계 함수 ---
+# "loads = [10 kN, 20 kN, 30 kN]" 처럼 [ ]로 감싼 목록 리터럴은 SymPy 파서가
+# 별도 처리 없이도 그냥 파이썬 list로 계산해준다(대괄호는 파이썬 문법이라
+# 파서가 원래 알고 있음). 여기 함수들은 그 목록을 받아 하나의 값으로 요약한다.
+# 항목이 단위 있는 값(Pint Quantity)이어도 그대로 동작한다 — Quantity가
+# +, <, > 연산자를 직접 구현하고 있어서(단, 차원이 다르면 에러) 파이썬
+# 내장 sum()/max()/min()과 똑같이 쓸 수 있다.
+
+
+def _agg_sum(items: Any) -> Any:
+    """목록의 합. 빈 목록이면 0."""
+    items = list(items)
+    if not items:
+        return sympy.Integer(0)
+    total = items[0]
+    for item in items[1:]:
+        total = total + item
+    return total
+
+
+def _agg_max(items: Any) -> Any:
+    """목록의 최댓값."""
+    items = list(items)
+    if not items:
+        raise ValueError("빈 목록의 최댓값은 구할 수 없습니다")
+    return max(items)
+
+
+def _agg_min(items: Any) -> Any:
+    """목록의 최솟값."""
+    items = list(items)
+    if not items:
+        raise ValueError("빈 목록의 최솟값은 구할 수 없습니다")
+    return min(items)
+
+
+def _agg_avg(items: Any) -> Any:
+    """목록의 평균."""
+    items = list(items)
+    if not items:
+        raise ValueError("빈 목록의 평균은 구할 수 없습니다")
+    return _agg_sum(items) / len(items)
+
+
+def _agg_count(items: Any) -> Any:
+    """목록의 항목 개수."""
+    return sympy.Integer(len(list(items)))
+
+
 #: 수식 안에서 함수처럼 쓸 수 있는 이름들 (SymPy 파서의 local_dict로 전달됨).
 FUNCTIONS: dict[str, Callable[..., Any]] = {
     # 삼각함수 (degree 기준)
@@ -96,6 +145,13 @@ FUNCTIONS: dict[str, Callable[..., Any]] = {
     "round": _round,
     "ceil": sympy.ceiling,
     "floor": sympy.floor,
+    # 목록 집계: sum([...]), max([...]), min([...]), avg/mean([...]), count([...])
+    "sum": _agg_sum,
+    "max": _agg_max,
+    "min": _agg_min,
+    "avg": _agg_avg,
+    "mean": _agg_avg,
+    "count": _agg_count,
 }
 
 #: 수식 안에서 변수처럼 쓸 수 있는 상수들.

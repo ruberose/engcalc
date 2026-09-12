@@ -14,6 +14,14 @@ from dataclasses import dataclass
 # '='는 있지만 바로 뒤에 또 '='가 오지 않는 경우만 대입으로 본다 (==, >=, <= 와 구분하기 위함).
 _ASSIGNMENT_PATTERN = re.compile(r"^\s*([^\W\d]\w*)\s*=(?!=)\s*(.*)$", re.UNICODE)
 
+# "이름(매개변수, ...) = 본문" 형태의 사용자 정의 함수. 매개변수는 최소 1개 이상
+# 필요하다(0개짜리는 그냥 일반 변수 대입과 구분할 이유가 없어서 지원하지 않음).
+# 대입 패턴과 마찬가지로 '='만(==, >=, <= 아님) 매칭한다.
+_FUNCTION_DEF_PATTERN = re.compile(
+    r"^\s*([^\W\d]\w*)\s*\(\s*([^\W\d]\w*(?:\s*,\s*[^\W\d]\w*)*)\s*\)\s*=(?!=)\s*(.*)$",
+    re.UNICODE,
+)
+
 # 계산기 습관대로 맨 끝에 "="만 붙이는 경우(예: "32mm + 42mm =")를 위한 패턴.
 # ==, <=, >=, != 의 일부인 '='는 건드리면 안 되므로, 바로 앞이 =/</>/! 가 아닐 때만 지운다.
 _TRAILING_EQUALS_PATTERN = re.compile(r"(?<![=<>!])=\s*$")
@@ -25,6 +33,9 @@ class ParsedInput:
 
     variable_name: str | None
     expression_text: str
+    #: "f(x, y) = ..." 형태의 함수 정의면 매개변수 이름 목록, 아니면 None.
+    #: None이 아니면 variable_name은 함수 이름, expression_text는 함수 본문이다.
+    function_params: list[str] | None = None
 
 
 def strip_trailing_calculator_equals(text: str) -> str:
@@ -45,21 +56,29 @@ def strip_trailing_calculator_equals(text: str) -> str:
 
 def parse_input(text: str) -> ParsedInput:
     """
-    입력 문자열이 "이름 = 수식" 형태면 (이름, 수식)으로, 아니면 (None, 전체)로 나눈다.
+    입력 문자열이 "이름 = 수식" 형태면 (이름, 수식)으로, "이름(매개변수) = 본문" 형태면
+    함수 정의로, 그 외엔 (None, 전체)로 나눈다.
 
     Args:
         text: 사용자가 입력한 원본 문자열
 
     Returns:
-        ParsedInput(variable_name, expression_text)
+        ParsedInput(variable_name, expression_text, function_params)
 
     사용 예:
         parse_input("a = 100")             -> ParsedInput("a", "100")
         parse_input("a * sin(30)")         -> ParsedInput(None, "a * sin(30)")
         parse_input("sigma == sigma_허용")  -> ParsedInput(None, "sigma == sigma_허용")
         parse_input("32mm + 42mm =")       -> ParsedInput(None, "32mm + 42mm")
+        parse_input("f(x) = x^2 + 1")      -> ParsedInput("f", "x^2 + 1", ["x"])
     """
     text = strip_trailing_calculator_equals(text)
+
+    function_match = _FUNCTION_DEF_PATTERN.match(text)
+    if function_match:
+        name, params_text, body_text = function_match.groups()
+        params = [p.strip() for p in params_text.split(",")]
+        return ParsedInput(variable_name=name, expression_text=body_text, function_params=params)
 
     match = _ASSIGNMENT_PATTERN.match(text)
     if match:

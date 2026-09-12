@@ -26,6 +26,7 @@ from file_io.file_manager import load_document, save_document
 from file_io.pdf_exporter import export_to_pdf
 from ui.find_dialog import FindDialog
 from ui.help_dialog import HelpDialog
+from ui.new_document_dialog import NewDocumentDialog
 from ui.property_panel import PropertyPanel
 from ui.variable_inspector import VariableInspector
 
@@ -373,9 +374,13 @@ class MainWindow(QMainWindow):
             Path(path).unlink(missing_ok=True)
             return
 
+        metadata = data.get("metadata", {})
+        self._scene.set_document_format(
+            metadata.get("document_format", "freeform"), metadata.get("paper_size", "A4")
+        )
         self._scene.load_blocks_list(blocks)
         self._current_file_path = original_path
-        self._created_at = data.get("metadata", {}).get("created", datetime.now().isoformat())
+        self._created_at = metadata.get("created", datetime.now().isoformat())
         self._recovered_from_autosave = True
         self._is_modified = True
         self._update_window_title()
@@ -396,6 +401,8 @@ class MainWindow(QMainWindow):
                 "modified": datetime.now().isoformat(),
                 # 복구했을 때 원래 파일로 되돌려 저장할 수 있도록 원본 경로도 같이 적어둔다.
                 "original_file_path": self._current_file_path,
+                "document_format": self._scene.document_format(),
+                "paper_size": self._scene.paper_size(),
             },
             "blocks": self._scene.to_blocks_list(),
         }
@@ -412,10 +419,21 @@ class MainWindow(QMainWindow):
     # --- 새로 만들기 / 열기 / 저장 ---
 
     def _on_new_document(self) -> None:
-        """현재 문서를 비우고 새 문서를 시작한다 (저장 안 한 변경사항이 있으면 먼저 물어봄)."""
+        """
+        새 문서의 형식(자유 캔버스/용지)을 물어본 뒤, 현재 문서를 비우고 새 문서를 시작한다.
+
+        저장 안 한 변경사항이 있으면 먼저 물어보고, 형식 선택 대화상자에서
+        취소를 누르면 지금 문서를 그대로 두고 아무 것도 하지 않는다.
+        """
         if not self._confirm_discard_changes():
             return
+        dialog = NewDocumentDialog(self)
+        if dialog.exec() != NewDocumentDialog.DialogCode.Accepted:
+            return
+        document_format, paper_size = dialog.result_format()
+
         self._scene.load_blocks_list([])
+        self._scene.set_document_format(document_format, paper_size)
         self._current_file_path = None
         self._created_at = datetime.now().isoformat()
         self._is_modified = False
@@ -454,6 +472,9 @@ class MainWindow(QMainWindow):
             return
 
         metadata = data.get("metadata", {})
+        self._scene.set_document_format(
+            metadata.get("document_format", "freeform"), metadata.get("paper_size", "A4")
+        )
         self._created_at = metadata.get("created", datetime.now().isoformat())
         self._current_file_path = file_path
         self._is_modified = False
@@ -490,6 +511,8 @@ class MainWindow(QMainWindow):
                 "author": "",
                 "created": self._created_at,
                 "modified": now,
+                "document_format": self._scene.document_format(),
+                "paper_size": self._scene.paper_size(),
             },
             "blocks": self._scene.to_blocks_list(),
         }

@@ -6,10 +6,11 @@
 이 씬은 "격자 배경 + 블록 생성" 이라는 캔버스 차원의 책임만 진다.
 """
 
+import math
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QPainter, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
 from blocks.base_block import BaseBlock
@@ -28,6 +29,27 @@ MAX_UNDO_STEPS = 50
 
 #: 붙여넣은 블록을 원본과 겹치지 않게 어긋나게 놓는 거리(px).
 _PASTE_OFFSET = 20.0
+
+#: "용지 기반" 문서 형식에서 고를 수 있는 용지 크기(mm). 나중에 다른 용지를
+#: 추가할 땐 이 딕셔너리에 항목만 더하면 된다(다른 코드는 안 바꿔도 됨).
+PAPER_SIZES_MM: dict[str, tuple[float, float]] = {"A4": (210.0, 297.0)}
+
+#: 화면에 용지를 그릴 때 쓰는 가상 해상도(dpi). file_io/pdf_exporter.py의
+#: RESOLUTION_DPI와 같은 값이지만, 저 쪽은 실제 PDF 출력용이라 여긴 화면
+#: 표시 전용으로 따로 둔다(둘을 같은 모듈에 묶어야 할 이유가 없어서 분리 유지).
+_SCREEN_DPI = 96
+
+#: 용지들 사이(및 첫 용지 위/스크롤 여백)의 회색 "책상" 간격(px).
+_PAGE_GAP_PX = 40.0
+
+_PAGE_DESK_COLOR = QColor(178, 178, 178)
+_PAGE_BORDER_COLOR = QColor(140, 140, 140)
+_PAGE_NUMBER_COLOR = QColor(110, 110, 110)
+
+
+def _mm_to_px(value_mm: float, dpi: float = _SCREEN_DPI) -> float:
+    """mm 단위를 화면 표시용 픽셀로 변환한다 (1인치 = 25.4mm)."""
+    return value_mm / 25.4 * dpi
 
 #: 저장 파일의 "type" 문자열 -> 블록 클래스. load_blocks_list()가 블록을 복원할 때 사용한다.
 _BLOCK_CLASSES: dict[str, type[BaseBlock]] = {
@@ -59,6 +81,11 @@ class DocumentScene(QGraphicsScene):
         self._scope = Scope()
         self._variable_blocks: dict[str, MathBlock] = {}
 
+        # --- 문서 형식 ("freeform": 기존 자유 캔버스, "paper": A4 등 용지 기반) ---
+        self._document_format: str = "freeform"
+        self._paper_size: str = "A4"
+        self._page_count: int = 1
+
         # --- 실행취소 / 다시실행 / 클립보드 ---
         # 문서 전체를 to_blocks_list()로 스냅샷 떠서 스택에 쌓는 방식이다.
         # 블록별로 "무슨 동작이었는지"를 따로 기록하는 대신, 파일 저장/불러오기에
@@ -67,12 +94,47 @@ class DocumentScene(QGraphicsScene):
         self._redo_stack: list[list[dict]] = []
         self._clipboard: list[dict] = []
 
+        # 용지 모드에서 블록이 늘어나 페이지가 모자라지면 자동으로 페이지를
+        # 늘린다 — changed는 블록 추가/삭제/이동/불러오기 등 내용이 바뀌는
+        # 모든 경로에서 공통으로 울리므로, 그 경로들 각각에 훅을 심는 대신
+        # 여기 한 곳에서만 처리한다(자유 캔버스면 아무 일도 안 하고 바로 리턴).
+        self.changed.connect(self._sync_pages)
+
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
-        """배경을 그린다. 평소엔 격자까지, PDF 내보내기 중엔 흰 배경만(격자는 인쇄 안 함)."""
-        if self._grid_visible:
-            draw_grid(painter, rect)
-        else:
+        """배경을 그린다. 평소엔 격자(또는 용지)까지, PDF 내보내기 중엔 흰 배경만(격자는 인쇄 안 함)."""
+        if not self._grid_visible:
             painter.fillRect(rect, QBrush(BACKGROUND_COLOR))
+            return
+        if self._document_format == "paper":
+            self._draw_paper_background(painter, rect)
+        else:
+            draw_grid(painter, rect)
+
+    def _draw_paper_background(self, painter: QPainter, rect: QRectF) -> None:
+        """용지 기반 문서의 배경: 회색 "책상" 바탕 위에 페이지마다 흰 용지 + 격자 + 쪽 번호."""
+        painter.fillRect(rect, QBrush(_PAGE_DESK_COLOR))
+        pages = self._page_rects()
+        for index, page_rect in enumerate(pages):
+            visible = page_rect.intersected(rect)
+            if visible.isEmpty():
+                continue
+            draw_grid(painter, visible)
+            pen = QPen(_PAGE_BORDER_COLOR)
+            pen.setWidth(0)  # 코스메틱 펜: 확대/축소와 무관하게 항상 1px
+            painter.setPen(pen)
+            painter.drawRect(page_rect)
+            self._draw_page_number(painter, page_rect, index + 1, len(pages))
+
+    def _draw_page_number(self, painter: QPainter, page_rect: QRectF, page_number: int, total_pages: int) -> None:
+        """용지 아래 여백에 작게 "N / 전체" 쪽 번호를 적는다."""
+        painter.save()
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        painter.setPen(QPen(_PAGE_NUMBER_COLOR))
+        label_rect = QRectF(page_rect.left(), page_rect.bottom() + 4, page_rect.width(), _PAGE_GAP_PX - 8)
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, f"{page_number} / {total_pages}")
+        painter.restore()
 
     def set_grid_visible(self, visible: bool) -> None:
         """
@@ -80,11 +142,91 @@ class DocumentScene(QGraphicsScene):
 
         Note:
             PDF 내보내기(file_io/pdf_exporter.py)는 이 씬을 그대로 QPainter에
-            렌더링하는 방식을 쓰는데, 화면용 격자선까지 인쇄되면 지저분해 보이므로
-            내보내는 동안만 잠깐 꺼둔다.
+            렌더링하는 방식을 쓰는데, 화면용 격자선(용지 모드라면 회색 배경/쪽
+            경계/쪽 번호까지)이 인쇄되면 지저분해 보이므로 내보내는 동안만
+            잠깐 꺼둔다 — 꺼져 있으면 문서 형식과 무관하게 흰 배경만 그려진다.
         """
         self._grid_visible = visible
         self.update()
+
+    # --- 문서 형식 (자유 캔버스 / 용지 기반) ---
+
+    def set_document_format(self, document_format: str, paper_size: str = "A4") -> None:
+        """
+        문서 형식을 정한다.
+
+        Args:
+            document_format: "freeform"(자유 캔버스) 또는 "paper"(용지 기반). 그 외
+                알 수 없는 값은 "freeform"으로 취급한다(옛 파일 호환).
+            paper_size: document_format이 "paper"일 때 쓸 용지 이름(PAPER_SIZES_MM의 키).
+                모르는 이름이면 "A4"로 대체한다.
+
+        Note:
+            새 문서를 만들 때, 또는 파일을 열 때 한 번만 부르는 걸 전제로 한다 —
+            기존 문서를 열어둔 채로 형식만 바꾸는 UI는 이번 범위에 없다.
+        """
+        self._document_format = document_format if document_format == "paper" else "freeform"
+        self._paper_size = paper_size if paper_size in PAPER_SIZES_MM else "A4"
+        if self._document_format == "paper":
+            self._page_count = 1
+            self._update_scene_rect_for_pages()
+            self._sync_pages()  # 이미 내용이 있는 문서를 열 때는 그 내용만큼 페이지 수를 바로 맞춘다
+        else:
+            self.setSceneRect(0, 0, SCENE_WIDTH, SCENE_HEIGHT)
+        self.update()
+
+    def document_format(self) -> str:
+        """현재 문서 형식("freeform" 또는 "paper"). 저장할 때 메타데이터에 담긴다."""
+        return self._document_format
+
+    def paper_size(self) -> str:
+        """현재 용지 이름. document_format()이 "paper"일 때만 의미가 있다."""
+        return self._paper_size
+
+    def _page_size_px(self) -> tuple[float, float]:
+        """현재 paper_size의 (너비, 높이)를 화면 픽셀 단위로 반환한다."""
+        mm_w, mm_h = PAPER_SIZES_MM.get(self._paper_size, PAPER_SIZES_MM["A4"])
+        return _mm_to_px(mm_w), _mm_to_px(mm_h)
+
+    def _page_rects(self) -> list[QRectF]:
+        """현재 페이지 수만큼, 세로로 쌓인 용지 사각형 목록(위→아래 순서)."""
+        page_w, page_h = self._page_size_px()
+        rects = []
+        for index in range(self._page_count):
+            top = _PAGE_GAP_PX + index * (page_h + _PAGE_GAP_PX)
+            rects.append(QRectF(_PAGE_GAP_PX, top, page_w, page_h))
+        return rects
+
+    def _update_scene_rect_for_pages(self) -> None:
+        """현재 _page_count에 맞춰 씬 사각형(스크롤 범위)을 다시 계산한다."""
+        page_w, page_h = self._page_size_px()
+        width = page_w + 2 * _PAGE_GAP_PX
+        height = _PAGE_GAP_PX + self._page_count * (page_h + _PAGE_GAP_PX)
+        self.setSceneRect(0, 0, width, height)
+
+    def _sync_pages(self, _regions: list[QRectF] | None = None) -> None:
+        """
+        내용이 바뀔 때마다(self.changed 신호) 불려서, 필요한 페이지 수를 맞춘다.
+
+        용지 기반 문서에서 내용이 마지막 페이지 아래로 넘어가면 페이지를 자동으로
+        늘린다(워드처럼) — 항상 맨 아래에 빈 페이지 하나가 남도록 여유를 둔다.
+        자유 캔버스 문서면 아무 일도 하지 않는다.
+        """
+        if self._document_format != "paper":
+            return
+        _, page_h = self._page_size_px()
+        content_rect = self.itemsBoundingRect()
+        if content_rect.isEmpty():
+            page_count = 1  # 내용이 없는 새 문서는 빈 페이지 1장으로 시작한다
+        else:
+            band = page_h + _PAGE_GAP_PX
+            used_height = max(content_rect.bottom() - _PAGE_GAP_PX, 0.0)
+            pages_for_content = max(1, math.ceil(used_height / band))
+            page_count = pages_for_content + 1  # 마지막 페이지 아래에 빈 페이지 한 장을 여유로 남긴다
+        if page_count == self._page_count:
+            return
+        self._page_count = page_count
+        self._update_scene_rect_for_pages()
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         """

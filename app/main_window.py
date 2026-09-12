@@ -275,6 +275,14 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        self._lock_action = edit_menu.addAction("블록 잠그기(&K)")
+        self._lock_action.triggered.connect(lambda: self._on_set_locked(True))
+
+        self._unlock_action = edit_menu.addAction("블록 잠금 해제(&N)")
+        self._unlock_action.triggered.connect(lambda: self._on_set_locked(False))
+
+        edit_menu.addSeparator()
+
         find_action = edit_menu.addAction("찾기(&F)...")
         find_action.setShortcut(QKeySequence.StandardKey.Find)
         find_action.triggered.connect(self._on_show_find)
@@ -378,6 +386,13 @@ class MainWindow(QMainWindow):
             return
         self._scene.align_selected_blocks(mode)
 
+    def _on_set_locked(self, locked: bool) -> None:
+        """블록 잠그기/잠금 해제 메뉴 처리. 편집 중일 때는 무시한다(_on_undo와 같은 이유)."""
+        if self._is_editing_text():
+            return
+        self._scene.set_locked_for_selected(locked)
+        self._update_edit_menu_state()
+
     def _update_edit_menu_state(self) -> None:
         """편집 메뉴가 열릴 때마다(aboutToShow) 각 항목의 활성/비활성 상태를 갱신한다."""
         self._undo_action.setEnabled(self._scene.can_undo())
@@ -387,11 +402,14 @@ class MainWindow(QMainWindow):
         )
         self._copy_action.setEnabled(bool(self._scene.selectedItems()))
         self._paste_action.setEnabled(self._scene.can_paste())
-        selected_block_count = len([item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)])
+        selected_blocks = [item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)]
+        selected_block_count = len(selected_blocks)
         self._duplicate_action.setEnabled(selected_block_count >= 1)
         # 정렬은 기준으로 삼을 블록이 최소 2개는 있어야 의미가 있다.
         for action in self._align_actions:
             action.setEnabled(selected_block_count >= 2)
+        self._lock_action.setEnabled(any(not b.is_locked() for b in selected_blocks))
+        self._unlock_action.setEnabled(any(b.is_locked() for b in selected_blocks))
 
     # --- 수정 감지 / 창 제목 ---
 

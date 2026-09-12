@@ -403,6 +403,19 @@ class DocumentScene(QGraphicsScene):
             if isinstance(item, BaseBlock):
                 item.setSelected(True)
 
+    # --- 잠금 ---
+
+    def set_locked_for_selected(self, locked: bool) -> None:
+        """선택된 블록(들)을 모두 잠그거나 잠금을 해제한다. 실행취소 가능."""
+        blocks = [item for item in self.selectedItems() if isinstance(item, BaseBlock)]
+        if not blocks:
+            return
+
+        before = self.capture_undo_snapshot()
+        for block in blocks:
+            block.set_locked(locked)
+        self.commit_undo_snapshot(before)
+
     # --- 복사 / 붙여넣기 / 복제 ---
 
     def copy_selected_blocks(self) -> None:
@@ -501,7 +514,7 @@ class DocumentScene(QGraphicsScene):
             위아래 순서가 바뀔 수 있으므로("계산 순서" 규칙) 끝나면 다시
             계산한다.
         """
-        blocks = [item for item in self.selectedItems() if isinstance(item, BaseBlock)]
+        blocks = [item for item in self.selectedItems() if isinstance(item, BaseBlock) and not item.is_locked()]
         if len(blocks) < 2 or mode not in _ALIGN_MODES:
             return
 

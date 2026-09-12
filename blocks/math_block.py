@@ -526,15 +526,18 @@ class MathBlock(BaseBlock):
 
         if self.isSelected():
             rect = self.boundingRect()
-            pen = QPen(QColor(0, 0, 0))
+            pen = QPen(self._selection_pen_color())
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rect)
 
-            painter.setPen(QPen(QColor(0, 0, 0)))
-            painter.setBrush(QColor(255, 255, 255))
-            painter.drawRect(self._handle_rect())
+            if not self._locked:
+                painter.setPen(QPen(QColor(0, 0, 0)))
+                painter.setBrush(QColor(255, 255, 255))
+                painter.drawRect(self._handle_rect())
+
+        self._draw_lock_badge(painter, self.boundingRect())
 
     def _draw_one_line(self, painter: QPainter, y: float) -> None:
         """"입력 = 결과"를 한 줄로 그린다 (에러 상태면 빨간색으로)."""
@@ -630,7 +633,7 @@ class MathBlock(BaseBlock):
             손잡이가 아닌 곳을 누르면 그냥 super()에 맡긴다 — BaseBlock이 설정한
             ItemIsMovable 플래그 덕분에 Qt가 알아서 드래그 이동을 처리해준다.
         """
-        if self.isSelected() and self._handle_rect().contains(event.pos()):
+        if self.isSelected() and not self._locked and self._handle_rect().contains(event.pos()):
             self._resizing = True
             self._resize_start_mouse = event.scenePos()
             self._resize_start_width = self.boundingRect().width()
@@ -690,6 +693,8 @@ class MathBlock(BaseBlock):
                 (방금 만들어진 블록 — DocumentScene._create_math_block 참고). 생략하면
                 지금 시점 기준으로 새로 캡처한다(기존 블록을 더블클릭하는 일반적인 경우).
         """
+        if self._locked:
+            return
         if self._editor is not None:
             return
 
@@ -766,6 +771,8 @@ class MathBlock(BaseBlock):
             결과가 단위 있는 값(Quantity)일 때만 의미가 있다 — 에러 상태이거나
             단위 없는 순수 숫자·불리언 결과면 바꿀 단위 자체가 없으므로 무시한다.
         """
+        if self._locked:
+            return
         if self._editor is not None or self._unit_editor is not None:
             return
         if not self._has_convertible_result():

@@ -12,13 +12,21 @@
 
 import uuid
 
-from PySide6.QtCore import QRectF
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsSceneMouseEvent,
     QStyleOptionGraphicsItem,
     QWidget,
 )
+
+#: 선택 테두리 색 — 잠긴 블록은 회색으로 구분해서 "손댈 수 없음"을 알려준다.
+_SELECTION_COLOR = QColor(0, 0, 0)
+_SELECTION_COLOR_LOCKED = QColor(150, 150, 150)
+#: 잠긴 블록 우측 상단에 그리는 작은 자물쇠 배지.
+_LOCK_BADGE_SIZE = 16.0
+_LOCK_BADGE_COLOR = QColor(120, 120, 120)
 
 
 class BaseBlock(QGraphicsItem):
@@ -62,8 +70,47 @@ class BaseBlock(QGraphicsItem):
 
         self._position_changed_since_press = False
         self._undo_snapshot_before_move: list[dict] | None = None
+        self._locked = False
 
         self.setPos(*position)
+
+    # --- 잠금 ---
+
+    def is_locked(self) -> bool:
+        """이 블록이 잠겨 있는지 (이동/크기조절/편집/삭제가 막혀 있는지)."""
+        return self._locked
+
+    def set_locked(self, locked: bool) -> None:
+        """
+        블록을 잠그거나 잠금을 해제한다.
+
+        Note:
+            이동은 ItemIsMovable 플래그 하나로 Qt가 알아서 막아준다(드래그
+            이벤트 처리를 따로 가로챌 필요가 없음). 편집 진입/크기조절 손잡이/
+            삭제는 각 블록·뷰가 is_locked()를 직접 확인해서 막는다. 선택
+            (ItemIsSelectable)은 잠가도 그대로 둔다 — 잠금을 해제하려면
+            먼저 선택할 수 있어야 하기 때문이다.
+        """
+        self._locked = locked
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)
+        self.update()
+
+    def _selection_pen_color(self) -> QColor:
+        """선택 테두리 색 — 잠긴 블록은 회색으로 구분해서 보여준다."""
+        return _SELECTION_COLOR_LOCKED if self._locked else _SELECTION_COLOR
+
+    def _draw_lock_badge(self, painter: QPainter, rect: QRectF) -> None:
+        """잠긴 블록이면 우측 상단에 작은 자물쇠 표시를 그린다(선택 여부와 무관하게 항상)."""
+        if not self._locked:
+            return
+        painter.save()
+        font = painter.font()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(_LOCK_BADGE_COLOR)
+        badge_rect = QRectF(rect.right() - _LOCK_BADGE_SIZE - 2, rect.top() + 2, _LOCK_BADGE_SIZE, _LOCK_BADGE_SIZE)
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "\U0001f512")
+        painter.restore()
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt 오버라이드 메서드는 camelCase 유지)
         """자식 클래스가 자신의 그려지는 영역 크기에 맞게 반드시 재정의해야 한다."""
@@ -97,6 +144,7 @@ class BaseBlock(QGraphicsItem):
             "type": self.BLOCK_TYPE,
             "id": self.block_id,
             "position": [self.pos().x(), self.pos().y()],
+            "locked": self._locked,
         }
 
     def deserialize(self, data: dict) -> None:
@@ -112,6 +160,7 @@ class BaseBlock(QGraphicsItem):
         """
         x, y = data["position"]
         self.setPos(x, y)
+        self.set_locked(bool(data.get("locked", False)))
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         """

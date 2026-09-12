@@ -234,10 +234,12 @@ class TextBlock(BaseBlock):
 
         if self.isSelected():
             pen = painter.pen()
-            pen.setColor(QColor(0, 0, 0))
+            pen.setColor(self._selection_pen_color())
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawRect(self.boundingRect())
+
+        self._draw_lock_badge(painter, self.boundingRect())
 
     # --- 편집 모드 진입/종료 ---
 
@@ -260,6 +262,8 @@ class TextBlock(BaseBlock):
             편집 중에는 paint()가 아무것도 그리지 않으므로,
             화면에는 _InlineTextEditor만 보이게 되어 텍스트가 겹쳐 보이지 않는다.
         """
+        if self._locked:
+            return
         if self._editor is not None:
             return
 

@@ -193,7 +193,9 @@ class DocumentView(QGraphicsView):
         scene = self.scene()
         if scene is None:
             return
-        selected = scene.selectedItems()
+        # 잠긴 블록은 삭제 대상에서 뺀다 — 실수로 지워지지 않게 보호하는 게
+        # 잠금 기능의 목적이므로, Delete 키에도 예외를 두지 않는다.
+        selected = [item for item in scene.selectedItems() if not (hasattr(item, "is_locked") and item.is_locked())]
         if not selected:
             return
         before = scene.capture_undo_snapshot() if hasattr(scene, "capture_undo_snapshot") else None

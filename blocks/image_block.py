@@ -140,15 +140,18 @@ class ImageBlock(BaseBlock):
             painter.drawPixmap(rect, self._pixmap, QRectF(self._pixmap.rect()))
 
         if self.isSelected():
-            pen = QPen(QColor(0, 0, 0))
+            pen = QPen(self._selection_pen_color())
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rect)
 
-            painter.setPen(QPen(QColor(0, 0, 0)))
-            painter.setBrush(QColor(255, 255, 255))
-            painter.drawRect(self._handle_rect())
+            if not self._locked:
+                painter.setPen(QPen(QColor(0, 0, 0)))
+                painter.setBrush(QColor(255, 255, 255))
+                painter.drawRect(self._handle_rect())
+
+        self._draw_lock_badge(painter, rect)
 
     def _handle_rect(self) -> QRectF:
         """우측 하단 크기 조절 손잡이의 사각형 (씬이 아닌 이 블록의 로컬 좌표계 기준)."""
@@ -164,7 +167,7 @@ class ImageBlock(BaseBlock):
             손잡이가 아닌 곳을 누르면 그냥 super()에 맡긴다 — BaseBlock이 설정한
             ItemIsMovable 플래그 덕분에 Qt가 알아서 드래그 이동을 처리해준다.
         """
-        if self.isSelected() and self._handle_rect().contains(event.pos()):
+        if self.isSelected() and not self._locked and self._handle_rect().contains(event.pos()):
             self._resizing = True
             self._resize_start_mouse = event.scenePos()
             self._resize_start_size = (self._width, self._height)

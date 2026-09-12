@@ -137,3 +137,33 @@ def test_empty_string_is_unchanged():
 
 def test_combination_of_greek_sqrt_and_fraction():
     assert to_symbolic_display("sigma_max*sqrt(theta_min)/E") == "\\frac{\\sigma_{max}*\\sqrt{\\theta_{min}}}{E}"
+
+
+# --- "입력 = 결과" 한 줄에서 분수가 "=" 한쪽에만 적용되어야 함 ---
+
+
+def test_fraction_only_applies_to_the_side_of_equals_it_is_on():
+    """
+    "R_A=12/5"에 결과 "= 2.4"를 붙인 한 줄 전체가 분수로 묶이면 안 된다
+    (버그 리포트: "R_A=12"가 분자, "5 = 2.4"가 분모가 되어버렸음). "/"가
+    있는 "12/5" 쪽만 분수가 되고, 나머지는 그대로 남아야 한다.
+    """
+    result = to_symbolic_display("R_A=12/5 = 2.4")
+    assert result == "R_A=\\frac{12}{5 }= 2.4"
+
+
+def test_equals_only_line_without_division_is_unaffected():
+    assert to_symbolic_display("a = 100") == "a = 100"
+
+
+def test_division_stays_scoped_to_its_side_of_a_comparison_operator():
+    """"==", ">=", "<=" 등 비교 연산자도 나누는 기준이 되어, 그 뒤까지 분모로 삼키면 안 된다."""
+    assert to_symbolic_display("a/b == c") == "\\frac{a}{b }== c"
+    assert to_symbolic_display("a/b >= c") == "\\frac{a}{b }>= c"
+    assert to_symbolic_display("a/b <= c") == "\\frac{a}{b }<= c"
+
+
+def test_division_after_appended_comparison_result_is_still_a_fraction():
+    """"입력 = 결과"처럼 비교식 뒤에 "= True"가 덧붙어도, 그 앞의 분수는 그대로 유지되어야 한다."""
+    result = to_symbolic_display("a/b >= c = True")
+    assert result == "\\frac{a}{b }>= c = True"

@@ -72,7 +72,25 @@ def to_symbolic_display(text: str) -> str:
 
 
 def _transform(text: str) -> str:
-    """분수(최상위 "/"가 정확히 1개일 때) -> 루트 함수 호출 -> 그리스 문자/첨자 순으로 시도한다."""
+    """
+    대입/비교 연산자(=, ==, !=, >=, <=, <, >) 기준으로 먼저 나눈 뒤, 각 조각을
+    독립적으로 분수(최상위 "/"가 정확히 1개일 때) -> 루트 함수 호출 -> 그리스
+    문자/첨자 순으로 시도한다.
+
+    Note:
+        MathBlock은 "입력 = 결과"를 한 줄로 합쳐서 렌더링에 넘긴다(예: 입력
+        "R_A=12/5"에 결과 "= 2.4"를 붙인 "R_A=12/5 = 2.4"). 이렇게 먼저
+        나누지 않으면, 이 문자열 전체에서 최상위 "/"가 하나뿐이라고
+        판단해서 "R_A=12"를 분자, "5 = 2.4"를 분모로 삼아 식 전체를 분수로
+        묶어버리는 문제가 있었다(버그 리포트로 발견) — "/"는 대입/비교
+        연산자로 나뉘는 여러 항 중 그게 실제로 있는 한 항에서만 분수가
+        되어야 한다. 비교 연산자(==, >=, <= 등)도 같은 이유로 함께 나눈다
+        — 예를 들어 "a/b >= c"에서 ">="가 없으면 "b >= c" 전체가 분모가 되어버린다.
+    """
+    segments = _split_top_level_relational(text)
+    if segments is not None:
+        return "".join(_transform(part) + operator for part, operator in segments)
+
     fraction = _wrap_fraction(text)
     if fraction is not None:
         return fraction
@@ -181,3 +199,59 @@ def _split_top_level(text: str, separator: str) -> list[str] | None:
         start = pos + 1
     parts.append(text[start:])
     return parts
+
+
+#: 대입/비교 연산자 중 두 글자짜리(먼저 확인해야 "="/"<"/">" 한 글자로
+#: 잘못 잘리지 않는다) — 이 앱이 지원하는 비교 연산자 목록(engine/functions.py,
+#: docs/사용법.txt의 "지원하는 연산자")과 맞춘다.
+_TWO_CHAR_RELATIONAL_OPERATORS = ("==", "!=", ">=", "<=")
+
+
+def _split_top_level_relational(text: str) -> list[tuple[str, str]] | None:
+    """
+    최상위(괄호 밖) 깊이에서 대입/비교 연산자(=, ==, !=, >=, <=, <, >) 기준으로 나눈다.
+
+    분수(_wrap_fraction)가 "/"를 기준으로 식을 통째로 묶기 전에, 먼저 이런
+    연산자로 "항"을 나눠줘야 한다 — 그러지 않으면 "a/b >= c"에서 ">="
+    오른쪽까지 통째로 분모가 되어버리는 문제가 생긴다(_transform 참고).
+
+    Returns:
+        [(연산자 앞 조각, 그 뒤에 오는 연산자 문자열), ...] 형태의 리스트.
+        가장 마지막 항목은 문자열 끝까지의 조각과 빈 연산자("")로 끝난다
+        (연산자가 없는 나머지 부분을 표현하기 위함). 연산자가 하나도
+        없으면 None.
+    """
+    depth = 0
+    segments: list[tuple[str, str]] = []
+    start = 0
+    i = 0
+    length = len(text)
+    while i < length:
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0:
+            two_chars = text[i : i + 2]
+            if two_chars in _TWO_CHAR_RELATIONAL_OPERATORS:
+                segments.append((text[start:i], two_chars))
+                i += 2
+                start = i
+                continue
+            if ch in "=<>":
+                segments.append((text[start:i], ch))
+                i += 1
+                start = i
+                continue
+        i += 1
+
+    if not segments:
+        return None
+
+    segments.append((text[start:], ""))
+    return segments

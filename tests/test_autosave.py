@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from app.main_window import MainWindow
 from blocks.math_block import MathBlock
 from file_io.file_manager import save_document
+from ui.new_document_dialog import NewDocumentDialog
 
 _app = QApplication.instance() or QApplication([])
 
@@ -138,10 +139,12 @@ def test_new_document_clears_autosave(window, tmp_path, monkeypatch):
     assert autosave_path.exists()
 
     # _on_new_document()는 _is_modified=True일 때 "저장 안 한 변경사항이
-    # 있습니다" 확인창을 먼저 띄운다(자동 저장과는 별개의 기존 동작) —
-    # 자동 테스트에서 실제 대화상자가 뜨면 영원히 멈추므로 "버리기"를
-    # 선택한 것으로 흉내낸다.
+    # 있습니다" 확인창을 먼저 띄우고, 그다음 문서 형식(자유 캔버스/A4 용지)을
+    # 고르는 대화상자도 띄운다(둘 다 자동 저장과는 별개의 기존/신규 동작) —
+    # 자동 테스트에서 실제 대화상자가 뜨면 영원히 멈추므로 각각 "버리기"/
+    # "기본값(자유 캔버스)으로 확인"을 선택한 것으로 흉내낸다.
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
+    monkeypatch.setattr(NewDocumentDialog, "exec", lambda self: NewDocumentDialog.DialogCode.Accepted)
 
     window._on_new_document()
 

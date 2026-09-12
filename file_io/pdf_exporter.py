@@ -1,23 +1,33 @@
 """
-캔버스 내용을 PDF로 내보낸다.
+캔버스 내용을 PDF로 내보내거나 인쇄한다.
 
-QGraphicsScene을 그대로 QPdfWriter(=Qt의 QPrinter 계열)에 렌더링하는 방식을
-쓴다. 수식(mathtext 이미지), 텍스트 서식, 이미지가 이미 각 블록의 paint()에
-구현되어 있으므로, 이 방식을 쓰면 화면 캔버스와 PDF가 항상 똑같이 보이는 게
-저절로 보장된다 — ReportLab으로 블록마다 그리기 로직을 새로 만들면 화면
-렌더링과 따로 놀 위험이 있어, 계획서 기술스택 표의 "Qt 자체 QPrinter" 쪽을
-택했다.
+QGraphicsScene을 그대로 QPdfWriter/QPrinter(둘 다 QPagedPaintDevice 계열이라
+API가 거의 같다)에 렌더링하는 방식을 쓴다. 수식(mathtext 이미지), 텍스트
+서식, 이미지가 이미 각 블록의 paint()에 구현되어 있으므로, 이 방식을 쓰면
+화면 캔버스와 PDF/인쇄 결과가 항상 똑같이 보이는 게 저절로 보장된다 —
+ReportLab으로 블록마다 그리기 로직을 새로 만들면 화면 렌더링과 따로 놀
+위험이 있어, 계획서 기술스택 표의 "Qt 자체 QPrinter" 쪽을 택했다.
 
 A4 용지, 여백, 콘텐츠가 한 페이지보다 길면 여러 페이지로 나누기, 머리글
-(제목+날짜)/바닥글(페이지 번호)을 처리한다.
+(제목+날짜)/바닥글(페이지 번호)을 처리한다 — 이 페이지 나누기/배율/머리글·
+바닥글 로직(_render_scene_to_paged_device)은 PDF 내보내기(export_to_pdf)와
+인쇄(print_scene)가 그대로 공유한다. 대상 장치만 QPdfWriter냐 QPrinter냐가
+다를 뿐, "씬을 A4 여러 페이지로 나눠 그린다"는 본질은 같기 때문이다.
 """
 
 import math
 from datetime import date
+from typing import Union
 
 from PySide6.QtCore import QMarginsF, QRectF, Qt
 from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPainter, QPdfWriter
+from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QGraphicsScene
+
+#: export_to_pdf()/print_scene()이 공통으로 그리는 대상 장치 — 둘 다
+#: QPagedPaintDevice의 하위 클래스라 pageLayout()/resolution()/newPage()를
+#: 똑같이 지원한다.
+_PagedDevice = Union[QPdfWriter, QPrinter]
 
 #: 기본 용지 여백(mm). export_to_pdf()의 margin_mm 인자로 바꿀 수 있다.
 DEFAULT_MARGIN_MM = 20.0
@@ -57,6 +67,48 @@ def export_to_pdf(
     writer.setPageMargins(QMarginsF(margin_mm, margin_mm, margin_mm, margin_mm), QPageLayout.Unit.Millimeter)
     writer.setResolution(RESOLUTION_DPI)
 
+    painter = QPainter(writer)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    _render_scene_to_paged_device(scene, writer, painter, title)
+    painter.end()
+    return True
+
+
+def print_scene(scene: QGraphicsScene, printer: QPrinter, title: str = "") -> bool:
+    """
+    씬의 내용을 이미 인쇄 대화상자를 통과한 QPrinter에 인쇄한다.
+
+    export_to_pdf()와 페이지 나누기/배율/머리글·바닥글 로직을 그대로
+    공유한다 — 대상 장치만 QPdfWriter 대신 QPrinter일 뿐이다.
+
+    Args:
+        scene: 인쇄할 캔버스 씬 (DocumentScene). export_to_pdf()와 마찬가지로,
+               호출하는 쪽에서 미리 scene.clearSelection()을 해두는 걸 권장한다.
+        printer: 용지 크기/여백/프린터가 이미 정해진 QPrinter (보통 QPrintDialog를
+                 통과한 뒤). 그 설정을 그대로 존중해서 그린다 — 여기서 임의로
+                 A4나 여백을 강제하지 않는다(사용자가 대화상자에서 고른 값 우선).
+        title: 머리글에 표시할 문서 제목 (비어 있으면 "EngCalc 문서")
+
+    Returns:
+        성공하면 True. 캔버스에 블록이 하나도 없으면(인쇄할 내용이 없으면) False.
+    """
+    content_rect = scene.itemsBoundingRect()
+    if content_rect.isEmpty():
+        return False
+
+    painter = QPainter(printer)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    _render_scene_to_paged_device(scene, printer, painter, title)
+    painter.end()
+    return True
+
+
+def _render_scene_to_paged_device(scene: QGraphicsScene, writer: _PagedDevice, painter: QPainter, title: str) -> None:
+    """
+    이미 페이지 크기/여백이 정해지고 painter가 시작된 장치(writer)에, 씬을
+    여러 페이지로 나눠 그린다. export_to_pdf()/print_scene() 공용 핵심 로직.
+    """
+    content_rect = scene.itemsBoundingRect()
     page_rect = QRectF(writer.pageLayout().paintRectPixels(writer.resolution()))
     header_h = _mm_to_px(HEADER_HEIGHT_MM, writer.resolution())
     footer_h = _mm_to_px(FOOTER_HEIGHT_MM, writer.resolution())
@@ -69,9 +121,6 @@ def export_to_pdf(
     # 한 페이지의 본문 영역에 들어가는 만큼을, 씬 좌표 기준 높이로 환산.
     band_height_scene = body_height / scale if scale > 0 else content_rect.height()
     page_count = max(1, math.ceil(content_rect.height() / band_height_scene))
-
-    painter = QPainter(writer)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
     display_title = title or "EngCalc 문서"
     for page_index in range(page_count):
@@ -86,9 +135,6 @@ def export_to_pdf(
         scene.render(painter, target_rect, source_rect, Qt.AspectRatioMode.KeepAspectRatio)
         _draw_header(painter, page_rect, header_h, display_title)
         _draw_footer(painter, page_rect, footer_h, page_index + 1, page_count)
-
-    painter.end()
-    return True
 
 
 def _mm_to_px(value_mm: float, dpi: int) -> float:

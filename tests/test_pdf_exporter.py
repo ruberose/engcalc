@@ -3,13 +3,29 @@
 import os
 import tempfile
 
+from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QApplication
 
 from blocks.text_block import TextBlock
 from canvas.document_scene import DocumentScene
-from file_io.pdf_exporter import export_to_pdf
+from file_io.pdf_exporter import export_to_pdf, print_scene
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _pdf_backed_printer(file_path: str) -> QPrinter:
+    """
+    실제 프린터/대화상자 없이 print_scene()을 검증하기 위한 트릭.
+
+    QPrinter는 물리 프린터뿐 아니라 "PDF 파일로 출력"도 표준으로 지원한다
+    (많은 OS의 "PDF로 인쇄" 옵션과 같은 경로) — outputFormat을 PdfFormat으로
+    돌려서, 실제 프린터 없이도 print_scene()이 만든 결과물을 파일로 받아
+    검증할 수 있다.
+    """
+    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+    printer.setOutputFileName(file_path)
+    return printer
 
 
 def test_export_creates_valid_pdf_file():
@@ -86,3 +102,55 @@ def test_export_respects_grid_visibility_toggle():
 
     scene.set_grid_visible(True)
     assert scene._grid_visible is True
+
+
+# --- print_scene() (export_to_pdf()와 페이지 렌더링 로직을 공유) ---
+
+
+def test_print_scene_produces_output():
+    """인쇄할 내용이 있으면 True를 돌려주고 실제로 뭔가 그려져야 한다."""
+    scene = DocumentScene()
+    block = TextBlock(position=(10, 10))
+    block.set_text("인쇄 테스트")
+    scene.addItem(block)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = os.path.join(tmp_dir, "printed.pdf")
+        printer = _pdf_backed_printer(file_path)
+        result = print_scene(scene, printer, title="테스트 문서")
+
+        assert result is True
+        assert os.path.exists(file_path)
+        assert os.path.getsize(file_path) > 0
+
+
+def test_print_scene_empty_scene_returns_false():
+    """인쇄할 블록이 하나도 없으면 False를 돌려주고 아무 것도 만들지 않는다."""
+    scene = DocumentScene()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = os.path.join(tmp_dir, "empty.pdf")
+        printer = _pdf_backed_printer(file_path)
+        result = print_scene(scene, printer)
+
+        assert result is False
+
+
+def test_print_scene_respects_printer_page_layout():
+    """export_to_pdf()처럼 강제로 A4/여백을 정하지 않고, printer에 이미 설정된 값을 그대로 써야 한다."""
+    scene = DocumentScene()
+    block = TextBlock(position=(10, 10))
+    block.set_text("용지 설정 확인")
+    scene.addItem(block)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = os.path.join(tmp_dir, "letter.pdf")
+        printer = _pdf_backed_printer(file_path)
+        from PySide6.QtGui import QPageSize
+
+        printer.setPageSize(QPageSize(QPageSize.PageSizeId.Letter))
+
+        result = print_scene(scene, printer, title="Letter 용지")
+
+        assert result is True
+        assert printer.pageLayout().pageSize().id() == QPageSize.PageSizeId.Letter

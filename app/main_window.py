@@ -12,8 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence
+from PySide6.QtCore import QMarginsF, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QKeySequence, QPageLayout, QPageSize
+from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import QDockWidget, QFileDialog, QGraphicsTextItem, QMainWindow, QMenu, QMessageBox
 
 from app.settings import add_recent_file, autosave_file_path, get_recent_files
@@ -23,7 +24,7 @@ from blocks.math_block import MathBlock
 from canvas.document_scene import DocumentScene
 from canvas.document_view import DocumentView
 from file_io.file_manager import load_document, save_document
-from file_io.pdf_exporter import export_to_pdf
+from file_io.pdf_exporter import DEFAULT_MARGIN_MM, export_to_pdf, print_scene
 from ui.find_dialog import FindDialog
 from ui.help_dialog import HelpDialog
 from ui.new_document_dialog import NewDocumentDialog
@@ -201,6 +202,10 @@ class MainWindow(QMainWindow):
         insert_image_action.triggered.connect(self._on_insert_image)
 
         file_menu.addSeparator()
+        print_action = file_menu.addAction("인쇄(&T)...")
+        print_action.setShortcut(QKeySequence.StandardKey.Print)
+        print_action.triggered.connect(self._on_print)
+
         export_pdf_action = file_menu.addAction("PDF로 내보내기(&P)...")
         export_pdf_action.triggered.connect(self._on_export_pdf)
 
@@ -643,6 +648,46 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"PDF로 내보냈습니다: {file_path}", 3000)
         else:
             QMessageBox.information(self, "내보낼 내용 없음", "캔버스에 블록이 없어서 PDF를 만들지 않았습니다.")
+
+    # --- 인쇄 ---
+
+    def _on_print(self) -> None:
+        """
+        인쇄 대화상자를 띄워 현재 문서를 인쇄한다.
+
+        Note:
+            PDF 내보내기와 기본값(A4, 여백)은 맞춰두지만, 사용자가 인쇄
+            대화상자에서 프린터나 용지를 다르게 고르면 그 값을 그대로
+            따른다(file_io/pdf_exporter.py의 print_scene() 참고). 내용이
+            없으면 대화상자조차 띄우지 않는다 — 어차피 인쇄할 게 없는데
+            프린터 고르는 시스템 대화상자까지 띄우는 건 불필요한 수고다.
+        """
+        if self._scene.itemsBoundingRect().isEmpty():
+            QMessageBox.information(self, "인쇄할 내용 없음", "캔버스에 블록이 없어서 인쇄할 내용이 없습니다.")
+            return
+
+        default_name = Path(self._current_file_path).stem if self._current_file_path else _DEFAULT_TITLE
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        printer.setPageMargins(
+            QMarginsF(DEFAULT_MARGIN_MM, DEFAULT_MARGIN_MM, DEFAULT_MARGIN_MM, DEFAULT_MARGIN_MM),
+            QPageLayout.Unit.Millimeter,
+        )
+        printer.setDocName(default_name)
+
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() != QPrintDialog.DialogCode.Accepted:
+            return
+
+        self._scene.clearSelection()
+        self._scene.set_grid_visible(False)
+        try:
+            print_scene(self._scene, printer, title=default_name)
+        finally:
+            self._scene.set_grid_visible(True)
+
+        self.statusBar().showMessage("인쇄를 보냈습니다", 3000)
 
     # --- 찾기 ---
 

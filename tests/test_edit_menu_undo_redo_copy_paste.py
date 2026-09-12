@@ -71,8 +71,45 @@ def test_shortcuts_use_platform_standard_keys(window):
     """단축키는 QKeySequence.StandardKey로 등록되어 있어야 한다(운영체제별 관례를 따름)."""
     assert window._undo_action.shortcut() == QKeySequence.StandardKey.Undo
     assert window._redo_action.shortcut() == QKeySequence.StandardKey.Redo
+    assert window._select_all_action.shortcut() == QKeySequence.StandardKey.SelectAll
     assert window._copy_action.shortcut() == QKeySequence.StandardKey.Copy
     assert window._paste_action.shortcut() == QKeySequence.StandardKey.Paste
+
+
+def test_select_all_action_disabled_on_empty_canvas(window):
+    assert not window._select_all_action.isEnabled()
+
+
+def test_select_all_action_enabled_once_a_block_exists(window):
+    _add_math_block_via_ui(window, 150, 100, "a = 1")
+    assert window._select_all_action.isEnabled()
+
+
+def test_ctrl_a_keypress_selects_every_block(window):
+    """실제 Ctrl+A 키 입력만으로 캔버스의 모든 블록이 선택돼야 한다."""
+    first = _add_math_block_via_ui(window, 150, 100, "a = 1")
+    second = _add_math_block_via_ui(window, 150, 200, "b = 2")
+    window._scene.clearSelection()
+
+    QTest.keyClick(window, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    _app.processEvents()
+
+    assert first.isSelected()
+    assert second.isSelected()
+
+
+def test_select_all_ignored_while_editing_text(window):
+    """실제로 텍스트 편집 중일 때는 Ctrl+A가 문서 전체 선택으로 넘어가면 안 된다."""
+    block = _add_math_block_via_ui(window, 150, 100, "a = 1")
+    other = _add_math_block_via_ui(window, 150, 200, "b = 2")
+    block.start_editing()
+    _app.processEvents()
+
+    window._on_select_all()  # 편집 중이므로 무시되어야 함
+
+    assert not other.isSelected()
+
+    block.finish_editing()
 
 
 def test_undo_action_enabled_immediately_without_opening_menu(window):

@@ -229,6 +229,12 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        self._select_all_action = edit_menu.addAction("모두 선택(&A)")
+        self._select_all_action.setShortcut(QKeySequence.StandardKey.SelectAll)
+        self._select_all_action.triggered.connect(self._on_select_all)
+
+        edit_menu.addSeparator()
+
         self._copy_action = edit_menu.addAction("복사(&C)")
         self._copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         self._copy_action.triggered.connect(self._on_copy)
@@ -297,6 +303,20 @@ class MainWindow(QMainWindow):
         """
         return isinstance(self._scene.focusItem(), QGraphicsTextItem)
 
+    def _on_select_all(self) -> None:
+        """
+        모두 선택 메뉴/단축키(Ctrl+A) 처리.
+
+        Note:
+            블록을 편집 중일 때는 Ctrl+A가 편집기 자체의 "텍스트 전체 선택"으로
+            쓰이는 게 자연스러우므로(_on_undo와 같은 이유), 문서 단위 전체
+            선택은 편집 중이 아닐 때만 동작한다.
+        """
+        if self._is_editing_text():
+            return
+        self._scene.select_all_blocks()
+        self._update_edit_menu_state()
+
     def _on_undo(self) -> None:
         """
         실행취소 메뉴/단축키(Ctrl+Z) 처리.
@@ -358,6 +378,9 @@ class MainWindow(QMainWindow):
         """편집 메뉴가 열릴 때마다(aboutToShow) 각 항목의 활성/비활성 상태를 갱신한다."""
         self._undo_action.setEnabled(self._scene.can_undo())
         self._redo_action.setEnabled(self._scene.can_redo())
+        self._select_all_action.setEnabled(
+            any(isinstance(item, BaseBlock) for item in self._scene.items())
+        )
         self._copy_action.setEnabled(bool(self._scene.selectedItems()))
         self._paste_action.setEnabled(self._scene.can_paste())
         selected_block_count = len([item for item in self._scene.selectedItems() if isinstance(item, BaseBlock)])

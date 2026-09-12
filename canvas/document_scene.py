@@ -395,6 +395,14 @@ class DocumentScene(QGraphicsScene):
         self.clearSelection()
         self.load_blocks_list(following)
 
+    # --- 선택 ---
+
+    def select_all_blocks(self) -> None:
+        """캔버스 위 모든 블록을 선택 상태로 만든다."""
+        for item in self.items():
+            if isinstance(item, BaseBlock):
+                item.setSelected(True)
+
     # --- 복사 / 붙여넣기 / 복제 ---
 
     def copy_selected_blocks(self) -> None:

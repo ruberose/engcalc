@@ -195,6 +195,44 @@ def test_undo_stack_capped_at_max_steps():
     assert len(scene._undo_stack) == MAX_UNDO_STEPS
 
 
+# --- 전체 선택 ---
+
+
+def test_select_all_blocks_selects_every_block():
+    scene = DocumentScene()
+    math_block = MathBlock(position=(0, 0))
+    text_block = TextBlock(position=(0, 100))
+    image_block = ImageBlock(position=(0, 200))
+    for block in (math_block, text_block, image_block):
+        scene.addItem(block)
+
+    scene.select_all_blocks()
+
+    assert all(block.isSelected() for block in (math_block, text_block, image_block))
+
+
+def test_select_all_blocks_on_empty_scene_does_nothing():
+    """빈 씬에서 불러도 예외 없이 조용히 아무 일도 없어야 한다."""
+    scene = DocumentScene()
+    scene.select_all_blocks()  # 예외만 안 나면 충분
+    assert scene.selectedItems() == []
+
+
+def test_select_all_blocks_extends_partial_selection():
+    """일부만 선택된 상태에서 불러도 나머지까지 전부 선택돼야 한다."""
+    scene = DocumentScene()
+    a = MathBlock(position=(0, 0))
+    b = MathBlock(position=(0, 100))
+    scene.addItem(a)
+    scene.addItem(b)
+    a.setSelected(True)
+
+    scene.select_all_blocks()
+
+    assert a.isSelected()
+    assert b.isSelected()
+
+
 # --- 복사 / 붙여넣기 ---
 
 

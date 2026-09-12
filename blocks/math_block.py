@@ -88,7 +88,14 @@ def _display_text(text: str) -> str:
     return to_symbolic_display(dotted)
 
 
-def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap | None, str | None]:
+#: 오류 상태를 한 줄 표시 모드에서도 알아볼 수 있게 쓰는 색(ERROR_COLOR의 hex 값).
+#: matplotlib(mathtext) color 인자는 hex 문자열을 받으므로 QColor와 별도로 든다.
+_ERROR_COLOR_HEX = "#be1e1e"
+
+
+def _render_line(
+    text: str, font_size: int = INPUT_FONT_SIZE, color: str = "black"
+) -> tuple[QPixmap | None, str | None]:
     """
     한 줄을 mathtext로 렌더링해본다 (_display_text로 표시용 기호로 바꿔서).
 
@@ -105,7 +112,7 @@ def _render_line(text: str, font_size: int = INPUT_FONT_SIZE) -> tuple[QPixmap |
     # LaTeX 거부 가드를 건너뛴다. 원문에 이미 있었다면(사용자가 실수로 타이핑한
     # LaTeX) to_symbolic_display가 손대지 않으므로 가드가 그대로 적용되어야 한다.
     added_markup = any(ch in display for ch in MARKUP_CHARS) and not any(ch in text for ch in MARKUP_CHARS)
-    pixmap = render_to_pixmap(display, font_size, skip_markup_guard=added_markup)
+    pixmap = render_to_pixmap(display, font_size, color=color, skip_markup_guard=added_markup)
     if pixmap.isNull():
         return None, display
     return pixmap, None
@@ -425,15 +432,26 @@ class MathBlock(BaseBlock):
         결과 줄(분리 버전)과 "입력 = 결과"(한 줄로 합친 버전) 이미지를 다시 만들고,
         지금 폭(자동 또는 손잡이로 지정한 값)에 맞춰 한 줄/두 줄 중 무엇을
         보여줄지 정한다.
+
+        Note:
+            두 줄 모드에서는 에러 메시지가 별도 줄(_draw_bottom_line)에 빨간색으로
+            뜨지만, 기본값인 한 줄 모드는 "입력 = 결과"만 그리기 때문에 에러가
+            나도 겉보기엔 평범한 검은 글씨와 구분이 안 됐다(버그 리포트로 발견 —
+            단위 대소문자를 잘못 써서(예: "100mpa") 계산이 에러였는데 알아챌 방법이
+            없었음). 그래서 한 줄 모드에서도 에러면 입력을 빨간색으로 그린다.
         """
-        if self._result is None or self._result.is_error:
+        is_error = self._result is not None and self._result.is_error
+        if self._result is None or is_error:
             self._result_pixmap, self._result_fallback = None, None
         else:
             line = self._result_line_text()
             self._result_pixmap, self._result_fallback = _render_line(line) if line else (None, None)
 
         combined = self._combined_line_text()
-        self._combined_pixmap, self._combined_fallback = _render_line(combined) if combined else (None, None)
+        combined_color = _ERROR_COLOR_HEX if is_error else "black"
+        self._combined_pixmap, self._combined_fallback = (
+            _render_line(combined, color=combined_color) if combined else (None, None)
+        )
 
         self.prepareGeometryChange()
         self._one_line_mode = self._fits_in_one_line()
@@ -519,12 +537,14 @@ class MathBlock(BaseBlock):
             painter.drawRect(self._handle_rect())
 
     def _draw_one_line(self, painter: QPainter, y: float) -> None:
-        """"입력 = 결과"를 한 줄로 그린다."""
+        """"입력 = 결과"를 한 줄로 그린다 (에러 상태면 빨간색으로)."""
         if self._combined_pixmap is not None:
             painter.drawPixmap(TEXT_PADDING, int(y), self._combined_pixmap)
         elif self._combined_fallback is not None:
             metrics = QFontMetrics(self._plain_font())
-            self._draw_plain_line(painter, metrics, y, self._combined_fallback, TEXT_COLOR)
+            is_error = self._result is not None and self._result.is_error
+            color = ERROR_COLOR if is_error else TEXT_COLOR
+            self._draw_plain_line(painter, metrics, y, self._combined_fallback, color)
 
     def _draw_input_line(self, painter: QPainter, metrics: QFontMetrics, y: float) -> float:
         """(두 줄 모드) 입력 줄을 그리고, 다음 줄이 시작할 y 증가분을 돌려준다."""

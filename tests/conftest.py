@@ -43,7 +43,7 @@ def isolated_qsettings(tmp_path, monkeypatch):
 
 
 class _FakeClipboard:
-    """실제 OS 클립보드 대신 쓰는 가짜 — image()/setText()/text()만 흉내 낸다(지금 코드가 그것만 씀)."""
+    """실제 OS 클립보드 대신 쓰는 가짜 — image()/setText()/text()/clear()만 흉내 낸다(지금 코드가 그것만 씀)."""
 
     def __init__(self) -> None:
         self._image = QImage()
@@ -60,6 +60,10 @@ class _FakeClipboard:
 
     def text(self) -> str:
         return self._text
+
+    def clear(self) -> None:
+        self._image = QImage()
+        self._text = ""
 
 
 @pytest.fixture(autouse=True)

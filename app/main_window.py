@@ -380,10 +380,20 @@ class MainWindow(QMainWindow):
         Note:
             복사는 화면을 바꾸지 않아 scene.changed가 안 울리므로, 붙여넣기 항목의
             활성 상태(can_paste())를 반영하려면 여기서 직접 갱신해야 한다.
+
+            OS 클립보드에 이미지가 남아있으면(스크린샷을 찍은 뒤 등) _on_paste()가
+            그 이미지를 항상 내부 블록 클립보드보다 우선시킨다 — 그래서 이미지를
+            한 번 붙여넣은 뒤에는, 블록을 Ctrl+C로 복사해도 Ctrl+V를 누르면 계속
+            그 이미지만 다시 붙여넣겨서 "복사가 안 먹힌다"고 오해하기 쉬웠다
+            (사용자 리포트로 발견). 다른 모든 앱처럼 "방금 복사한 것"이 다음
+            붙여넣기 대상이 되도록, 블록을 복사하면 남아있던 클립보드 이미지는 비운다.
         """
         if self._is_editing_text():
             return
         self._scene.copy_selected_blocks()
+        clipboard = QApplication.clipboard()
+        if not clipboard.image().isNull():
+            clipboard.clear()
         self._update_edit_menu_state()
 
     def _on_paste(self) -> None:

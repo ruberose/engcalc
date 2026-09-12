@@ -6,6 +6,7 @@ import tempfile
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QApplication
 
+import file_io.pdf_exporter as pdf_exporter_module
 from blocks.text_block import TextBlock
 from canvas.document_scene import DocumentScene
 from file_io.pdf_exporter import export_to_pdf, print_scene
@@ -102,6 +103,108 @@ def test_export_respects_grid_visibility_toggle():
 
     scene.set_grid_visible(True)
     assert scene._grid_visible is True
+
+
+def test_export_does_not_enlarge_content_narrower_than_page():
+    """
+    본문 폭보다 좁은 내용은 확대하지 않고 화면 그대로의 크기로 찍혀야 한다.
+
+    사용자 피드백: "asdfasdfsdf" 한 줄짜리 블록을 PDF로 내보냈더니 글자가
+    페이지 폭에 맞춰 비정상적으로 커져서 나왔다("비율이 이상하다") — 좁은
+    한 줄짜리 씬을 억지로 페이지 폭까지 늘려 그리던 게 원인이었다.
+    """
+    scene = DocumentScene()
+    block = TextBlock(position=(10, 10))
+    block.set_text("a")  # 페이지 폭보다 훨씬 좁은 내용
+    scene.addItem(block)
+
+    captured: list[tuple] = []
+    original_render = scene.render
+
+    def spy_render(painter, target, source, *args, **kwargs):
+        captured.append((target, source))
+        return original_render(painter, target, source, *args, **kwargs)
+
+    scene.render = spy_render
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = os.path.join(tmp_dir, "narrow.pdf")
+        export_to_pdf(scene, file_path)
+
+    assert len(captured) == 1
+    target, source = captured[0]
+    # 확대됐다면 target 너비가 source 너비(씬 좌표 기준 내용 너비)보다 훨씬
+    # 컸을 것이다 — 확대하지 않았으면 거의 같아야 한다(scale == 1).
+    assert abs(target.width() - source.width()) < 1e-6
+
+
+def test_export_still_shrinks_content_wider_than_page():
+    """내용이 본문 폭보다 넓으면 지금까지처럼 페이지에 맞게 줄어들어야 한다."""
+    scene = DocumentScene()
+    wide_block = TextBlock(position=(0, 0))
+    wide_block.set_text("아주 긴 텍스트 " * 40)  # 페이지 폭보다 훨씬 넓게
+    scene.addItem(wide_block)
+
+    captured: list[tuple] = []
+    original_render = scene.render
+
+    def spy_render(painter, target, source, *args, **kwargs):
+        captured.append((target, source))
+        return original_render(painter, target, source, *args, **kwargs)
+
+    scene.render = spy_render
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        file_path = os.path.join(tmp_dir, "wide.pdf")
+        export_to_pdf(scene, file_path)
+
+    assert captured
+    target, source = captured[0]
+    assert target.width() < source.width()
+
+
+def test_header_footer_off_by_default():
+    """머리글/바닥글은 기본적으로 그리지 않아야 한다(나중에 별도 기능으로 추가 예정)."""
+    calls: list[str] = []
+    original_header = pdf_exporter_module._draw_header
+    original_footer = pdf_exporter_module._draw_footer
+    pdf_exporter_module._draw_header = lambda *a, **kw: calls.append("header")
+    pdf_exporter_module._draw_footer = lambda *a, **kw: calls.append("footer")
+    try:
+        scene = DocumentScene()
+        block = TextBlock(position=(10, 10))
+        block.set_text("머리글 없음 확인")
+        scene.addItem(block)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            export_to_pdf(scene, os.path.join(tmp_dir, "no_header.pdf"))
+    finally:
+        pdf_exporter_module._draw_header = original_header
+        pdf_exporter_module._draw_footer = original_footer
+
+    assert calls == []
+
+
+def test_header_footer_drawn_when_requested():
+    """show_header_footer=True로 명시하면 머리글/바닥글을 그려야 한다."""
+    calls: list[str] = []
+    original_header = pdf_exporter_module._draw_header
+    original_footer = pdf_exporter_module._draw_footer
+    pdf_exporter_module._draw_header = lambda *a, **kw: calls.append("header")
+    pdf_exporter_module._draw_footer = lambda *a, **kw: calls.append("footer")
+    try:
+        scene = DocumentScene()
+        block = TextBlock(position=(10, 10))
+        block.set_text("머리글 있음 확인")
+        scene.addItem(block)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            export_to_pdf(scene, os.path.join(tmp_dir, "with_header.pdf"), show_header_footer=True)
+    finally:
+        pdf_exporter_module._draw_header = original_header
+        pdf_exporter_module._draw_footer = original_footer
+
+    assert calls == ["header", "footer"]
 
 
 # --- print_scene() (export_to_pdf()와 페이지 렌더링 로직을 공유) ---
